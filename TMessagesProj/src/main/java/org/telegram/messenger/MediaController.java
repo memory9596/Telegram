@@ -5012,6 +5012,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         private AlertDialog progressDialog;
         private ArrayList<MessageObject> messageObjects;
         private HashMap<String, MessageObject> loadingMessageObjects = new HashMap<>();
+        private HashMap<String, File> loadedFiles = new HashMap<>();
         private float finishedProgress;
         private boolean cancelled;
         private boolean finished;
@@ -5084,16 +5085,18 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                                 path = file.toString();
                             }
                             File sourceFile = new File(path);
+                            File loadedFile = null;
                             if (!sourceFile.exists()) {
                                 waitingForFile = new CountDownLatch(1);
                                 addMessageToLoad(message);
                                 waitingForFile.await();
+                                loadedFile = loadedFiles.remove(FileLoader.getAttachFileName(document));
                             }
                             if (cancelled) {
                                 break;
                             }
                             if (!sourceFile.exists()) {
-                                sourceFile = FileLoader.getInstance(currentAccount.getCurrentAccount()).getPathToAttach(message.messageOwner, true);
+                                sourceFile = loadedFile;
                                 FileLog.d("saving file: correcting path from " + path + " to " + (sourceFile == null ? null : sourceFile.getAbsolutePath()));
                             }
                             if (sourceFile != null && sourceFile.exists()) {
@@ -5157,12 +5160,17 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                                 }
                                 sourceFile = new File(path);
                             }
+                            File loadedFile = null;
                             if (!sourceFile.exists()) {
                                 waitingForFile = new CountDownLatch(1);
                                 addMessageToLoad(message);
                                 waitingForFile.await();
+                                loadedFile = loadedFiles.remove(FileLoader.getAttachFileName(document));
                             }
-                            if (sourceFile.exists()) {
+                            if (!sourceFile.exists()) {
+                                sourceFile = loadedFile;
+                            }
+                            if (sourceFile != null && sourceFile.exists()) {
                                 copyFile(sourceFile, destFile, message.getMimeType());
                                 copiedFiles++;
                             }
@@ -5196,6 +5204,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                 currentAccount.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoaded);
                 currentAccount.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadProgressChanged);
                 currentAccount.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadFailed);
+                loadedFiles.clear();
             });
         }
 
@@ -5235,6 +5244,8 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     }
                 });
                 waitingForFile.await();
+                loadedFiles.remove(FileLoader.getAttachFileName(photoSize));
+                loadedFiles.remove(FileLoader.getAttachFileName(media.document));
             }
             if (cancelled) {
                 return true;
@@ -5415,6 +5426,9 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             if (id == NotificationCenter.fileLoaded || id == NotificationCenter.fileLoadFailed) {
                 String fileName = (String) args[0];
                 if (loadingMessageObjects.remove(fileName) != null) {
+                    if (id == NotificationCenter.fileLoaded && args.length > 1 && args[1] instanceof File) {
+                        loadedFiles.put(fileName, (File) args[1]);
+                    }
                     waitingForFile.countDown();
                 }
             } else if (id == NotificationCenter.fileLoadProgressChanged) {
