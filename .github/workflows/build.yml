@@ -1,0 +1,144 @@
+name: Build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: /home/runner/.ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_COMPILERCHECK: content
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_SLOPPINESS: file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup jdk
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Patch BuildVars.java
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+        run: |
+          f="TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java"
+          sed -i -E 's/^([[:space:]]*public static int APP_ID[[:space:]]*=[[:space:]]*)[0-9]+;/\1'"${API_ID}"';/' "$f"
+          sed -i -E 's|^([[:space:]]*public static String APP_HASH[[:space:]]*=[[:space:]]*")[^"]*(";.*)|\1'"${API_HASH}"'\2|' "$f"
+
+      - name: Patch google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: printf '%s' "$GOOGLE_SERVICES_JSON" | base64 -d | tee TMessagesProj/google-services.json TMessagesProj_AppStandalone/google-services.json TMessagesProj_AppHuawei/google-services.json > /dev/null
+
+      - name: Init script
+        run: |
+          cat > "$RUNNER_TEMP/init.gradle" <<'GROOVY'
+          gradle.beforeProject { proj ->
+              proj.afterEvaluate {
+                  if (proj.plugins.hasPlugin('com.android.application')) {
+                      proj.android.buildTypes.all { bt ->
+                          bt.minifyEnabled = false
+                          bt.shrinkResources = false
+                      }
+                  }
+                  if (proj.plugins.hasPlugin('com.android.application') || proj.plugins.hasPlugin('com.android.library')) {
+                      proj.android.defaultConfig.externalNativeBuild.cmake.arguments(
+                          '-DCMAKE_C_COMPILER_LAUNCHER=ccache',
+                          '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache'
+                      )
+                  }
+              }
+          }
+          GROOVY
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ccache > /dev/null
+          mkdir -p "$CCACHE_DIR"
+
+      - name: Restore cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-ndk27.2-${{ hashFiles('TMessagesProj/jni/**', 'TMessagesProj/**/CMakeLists.txt') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-ndk27.2-
+
+      - name: Build
+        run: |
+          ./gradlew --stacktrace \
+            -I "$RUNNER_TEMP/init.gradle" \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g" \
+            :TMessagesProj_App:assembleAfatRelease \
+            :TMessagesProj_AppStandalone:assembleAfatStandalone \
+            :TMessagesProj_AppHuawei:assembleAfatRelease
+
+      - name: Ccache hit statistics
+        if: always()
+        run: ccache -s || true
+
+      - name: Delete old cache
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ccache-${{ runner.os }}-ndk27.2-${{ hashFiles('TMessagesProj/jni/**', 'TMessagesProj/**/CMakeLists.txt') }}
+        run: |
+          if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/caches?key=${CACHE_KEY}" >/dev/null 2>&1; then
+            echo "Deleted old cache with the same name: ${CACHE_KEY}"
+          else
+            echo "No old cache with the same name can be deleted, continue to save"
+          fi
+
+      - name: Save cache
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-ndk27.2-${{ hashFiles('TMessagesProj/jni/**', 'TMessagesProj/**/CMakeLists.txt') }}
+
+      - name: Rename APKs
+        run: |
+          mkdir -p dist
+          cp TMessagesProj_App/build/outputs/apk/afat/release/app.apk              "dist/app.apk"
+          cp TMessagesProj_AppStandalone/build/outputs/apk/afat/standalone/app.apk "dist/app-web.apk"
+          cp TMessagesProj_AppHuawei/build/outputs/apk/afat/release/app-huawei.apk "dist/app-huawei.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk
+          path: dist/app.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk-web
+          path: dist/app-web.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk-huawei
+          path: dist/app-huawei.apk
+          if-no-files-found: error
+          retention-days: 14
