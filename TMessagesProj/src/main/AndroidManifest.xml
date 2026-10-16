@@ -20,6 +20,7 @@
     <uses-feature android:name="android.hardware.sensor.proximity" android:required="false" />
 
     <uses-permission android:name="android.permission.READ_CLIPBOARD"/>
+    <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -264,6 +265,8 @@
                 <data android:host="telegram.dog" android:scheme="https" />
                 <data android:host="t.me" android:scheme="http" />
                 <data android:host="t.me" android:scheme="https" />
+                <data android:host="www.keepassdx.com" android:scheme="http" />
+                <data android:host="www.keepassdx.com" android:scheme="https" />
             </intent-filter>
             <intent-filter android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:priority="1">
                 <action android:name="android.intent.action.VIEW"/>
