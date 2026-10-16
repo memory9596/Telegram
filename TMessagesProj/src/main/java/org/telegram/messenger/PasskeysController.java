@@ -74,10 +74,17 @@ public class PasskeysController {
                 }
 
                 final String requestJson;
+                String rpId;
+                byte[] clientDataHash;
+                String clientDataJSON;
                 try {
                     final JSONObject obj = new JSONObject(res.options.data);
                     final JSONObject publicKeyObj = obj.getJSONObject("publicKey");
                     requestJson = publicKeyObj.toString();
+                    rpId = "https://" + publicKeyObj.getJSONObject("rp").getString("id");
+                    String challenge = publicKeyObj.getString("challenge");
+                    clientDataJSON = makeClientDataJSON(false, challenge, rpId);
+                    clientDataHash = sha256(clientDataJSON);
                 } catch (Exception e) {
                     FileLog.e(e);
                     done.run(null, e.getMessage());
@@ -85,7 +92,7 @@ public class PasskeysController {
                 }
 
                 final CreatePublicKeyCredentialRequest credentialRequest =
-                    new CreatePublicKeyCredentialRequest(requestJson);
+                    new CreatePublicKeyCredentialRequest(requestJson, clientDataHash, false, rpId);
 
                 try {
                     credentialManager.createCredential(context, credentialRequest, ktxCallback((res2, err2) -> {
@@ -120,7 +127,7 @@ public class PasskeysController {
                             final JSONObject response = json.getJSONObject("response");
                             final TL_account.inputPasskeyResponseRegister passkeyResponse = new TL_account.inputPasskeyResponseRegister();
                             passkeyResponse.client_data = new TLRPC.TL_dataJSON();
-                            passkeyResponse.client_data.data = new String(Base64.decode(response.getString("clientDataJSON"), Base64.URL_SAFE));
+                            passkeyResponse.client_data.data = clientDataJSON;
                             passkeyResponse.attestation_object = Base64.decode(response.getString("attestationObject"), Base64.URL_SAFE);
 
                             FileLog.d("AAGUID: " + bytesToHex(Arrays.copyOfRange(passkeyResponse.attestation_object, 67, 67 + 16)));
@@ -182,20 +189,27 @@ public class PasskeysController {
             }
 
             final String requestJson;
+            String rpId;
+            byte[] clientDataHash;
+            String clientDataJSON;
             try {
                 final JSONObject obj = new JSONObject(res.options.data);
                 final JSONObject publicKeyObj = obj.getJSONObject("publicKey");
                 requestJson = publicKeyObj.toString();
+                rpId = "https://" + publicKeyObj.getString("rpId");
+                clientDataJSON = makeClientDataJSON(true, publicKeyObj.getString("challenge"), rpId);
+                clientDataHash = sha256(clientDataJSON);
             } catch (Exception e) {
                 FileLog.e(e);
                 done.run(0L, null, e.getMessage());
                 return;
             }
 
-            final GetPublicKeyCredentialOption passkeyOption = new GetPublicKeyCredentialOption(requestJson);
+            final GetPublicKeyCredentialOption passkeyOption = new GetPublicKeyCredentialOption(requestJson, clientDataHash);
             final GetCredentialRequest request = new GetCredentialRequest.Builder()
                     .addCredentialOption(passkeyOption)
                     .setPreferImmediatelyAvailableCredentials(!clickedButton)
+                    .setOrigin(rpId)
                     .build();
 
             try {
@@ -221,7 +235,7 @@ public class PasskeysController {
                             final JSONObject response = json.getJSONObject("response");
                             final TL_account.inputPasskeyResponseLogin passkeyResponse = new TL_account.inputPasskeyResponseLogin();
                             passkeyResponse.client_data = new TLRPC.TL_dataJSON();
-                            passkeyResponse.client_data.data = new String(Base64.decode(response.getString("clientDataJSON"), Base64.URL_SAFE));
+                            passkeyResponse.client_data.data = clientDataJSON;
 
                             passkeyResponse.authenticator_data = Base64.decode(response.getString("authenticatorData"), Base64.URL_SAFE);
                             passkeyResponse.signature = Base64.decode(response.getString("signature"), Base64.URL_SAFE);
@@ -319,6 +333,19 @@ public class PasskeysController {
                 }
             }
         };
+    }
+
+    public static byte[] sha256(String clientDataJSON) throws java.security.NoSuchAlgorithmException {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        return md.digest(clientDataJSON.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    public static String makeClientDataJSON(boolean get, String challenge, String rpId) throws org.json.JSONException {
+        JSONObject clientData = new JSONObject();
+        clientData.put("type", get ? "webauthn.get" : "webauthn.create");
+        clientData.put("challenge", challenge);
+        clientData.put("origin", rpId);
+        return clientData.toString();
     }
 
     public static String bytesToHex(byte[] bytes) {
