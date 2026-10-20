@@ -239,6 +239,7 @@ import org.telegram.ui.Components.CubicBezierInterpolator;
 import org.telegram.ui.Components.DotDividerSpan;
 import org.telegram.ui.Components.EmojiPacksAlert;
 import org.telegram.ui.Components.EmptyStubSpan;
+import org.telegram.ui.Components.FiltersListBottomSheet;
 import org.telegram.ui.Components.FloatingDebug.FloatingDebugController;
 import org.telegram.ui.Components.Forum.ForumUtilities;
 import org.telegram.ui.Components.HintView;
@@ -252,6 +253,7 @@ import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.LinkSpanDrawable;
 import org.telegram.ui.Components.MediaActivity;
 import org.telegram.ui.Components.MessagePrivateSeenView;
+import org.telegram.ui.Components.Premium.LimitReachedBottomSheet;
 import org.telegram.ui.Components.ProfileActionsView;
 import org.telegram.ui.Components.ProfileGalleryBlurView;
 import org.telegram.ui.Components.Paint.PersistColorPalette;
@@ -602,6 +604,8 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
     private final static int enable_no_forwards = 46;
     private final static int disable_no_forwards = 47;
     private final static int send_money = 48;
+
+    private final static int add_to_folder = 60;
 
     private Rect rect = new Rect();
 
@@ -2981,6 +2985,8 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                     }
                 } else if (id == add_photo) {
                     onWriteButtonClick();
+                } else if (id == add_to_folder) {
+                    showAddToFolderSheet();
                 }
             }
         });
@@ -12164,6 +12170,10 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                             } else {
                                 otherItem.addSubItem(block_contact, R.drawable.msg_retry, LocaleController.getString(R.string.BotRestart));
                             }
+                            if (!FiltersListBottomSheet.getCanAddDialogFilters(this, getDialogId()).isEmpty()) {
+                                otherItem.addColoredGap();
+                                otherItem.addSubItem(add_to_folder, R.drawable.msg_folders, getString(R.string.FilterAddTo));
+                            }
                         } else {
                             otherItem.addSubItem(block_contact, !userBlocked ? R.drawable.msg_block : R.drawable.msg_block, !userBlocked ? LocaleController.getString(R.string.BlockContact) : LocaleController.getString(R.string.Unblock));
                         }
@@ -12344,6 +12354,13 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
 
         if (selfUser && !myProfile) {
             otherItem.addSubItem(logout, R.drawable.msg_leave, LocaleController.getString(R.string.LogOut));
+        } else {
+            if (!isBot) {
+                if (!myProfile && getDialogId() != 0 && !FiltersListBottomSheet.getCanAddDialogFilters(this, getDialogId()).isEmpty()) {
+                    otherItem.addColoredGap();
+                    otherItem.addSubItem(add_to_folder, R.drawable.msg_folders, getString(R.string.FilterAddTo));
+                }
+            }
         }
         if (!isPulledDown) {
             otherItem.hideSubItem(gallery_menu_save);
@@ -16972,6 +16989,61 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
     @Override
     public void onParentScrollToTop() {
         listView.smoothScrollToPosition(0);
+    }
+
+    private void showAddToFolderSheet() {
+        if (myProfile) {
+            return;
+        }
+        ArrayList<Long> selectedDialogs = new ArrayList<>(1);
+        selectedDialogs.add(getDialogId());
+        FiltersListBottomSheet sheet = new FiltersListBottomSheet(ProfileActivity.this, selectedDialogs);
+        sheet.setDelegate((filter, checked) -> {
+            ArrayList<Long> alwaysShow = FiltersListBottomSheet.getDialogsCount(ProfileActivity.this, filter, selectedDialogs, true, false);
+            if (!checked) {
+                int currentCount;
+                if (filter != null) {
+                    currentCount = filter.alwaysShow.size();
+                } else {
+                    currentCount = 0;
+                }
+                int totalCount = currentCount + alwaysShow.size();
+                if ((totalCount > getMessagesController().dialogFiltersChatsLimitDefault && !getUserConfig().isPremium()) || totalCount > getMessagesController().dialogFiltersChatsLimitPremium) {
+                    showDialog(new LimitReachedBottomSheet(ProfileActivity.this, fragmentView.getContext(), LimitReachedBottomSheet.TYPE_CHATS_IN_FOLDER, currentAccount, null));
+                    return;
+                }
+            }
+            if (filter != null) {
+                if (checked) {
+                    for (int a = 0; a < selectedDialogs.size(); a++) {
+                        filter.neverShow.add(selectedDialogs.get(a));
+                        filter.alwaysShow.remove(selectedDialogs.get(a));
+                    }
+                    FilterCreateActivity.saveFilterToServer(filter, filter.flags, filter.name, filter.entities, filter.title_noanimate, filter.color, filter.alwaysShow, filter.neverShow, filter.pinnedDialogs, false, false, true, true, false, ProfileActivity.this, null);
+                    final long did = selectedDialogs.size() == 1 ? selectedDialogs.get(0) : 0;
+                    final UndoView undoView = getUndoView();
+                    if (undoView != null) {
+                        undoView.showWithAction(did, UndoView.ACTION_REMOVED_FROM_FOLDER, selectedDialogs.size(), filter, null, null);
+                    }
+                } else {
+                    if (!alwaysShow.isEmpty()) {
+                        for (int a = 0; a < alwaysShow.size(); a++) {
+                            filter.neverShow.remove(alwaysShow.get(a));
+                        }
+                        filter.alwaysShow.addAll(alwaysShow);
+                        FilterCreateActivity.saveFilterToServer(filter, filter.flags, filter.name, filter.entities, filter.title_noanimate, filter.color, filter.alwaysShow, filter.neverShow, filter.pinnedDialogs, false, false, true, true, false, ProfileActivity.this, null);
+                    }
+                    final long did = alwaysShow.size() == 1 ? alwaysShow.get(0) : 0;
+                    final UndoView undoView = getUndoView();
+                    if (undoView != null) {
+                        undoView.showWithAction(did, UndoView.ACTION_ADDED_TO_FOLDER, alwaysShow.size(), filter, null, null);
+                    }
+                }
+            } else {
+                presentFragment(new FilterCreateActivity(null, alwaysShow));
+            }
+        });
+        showDialog(sheet);
     }
 
     private final class TextView2 extends TextView implements Theme.Colorable {

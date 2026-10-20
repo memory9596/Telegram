@@ -36,7 +36,6 @@ import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.DialogsActivity;
 
 import java.util.ArrayList;
 
@@ -60,9 +59,9 @@ public class FiltersListBottomSheet extends BottomSheet implements NotificationC
     }
 
     private final ArrayList<Long> selectedDialogs;
-    private final DialogsActivity fragment;
+    private final BaseFragment fragment;
 
-    public FiltersListBottomSheet(DialogsActivity baseFragment, ArrayList<Long> selectedDialogs) {
+    public FiltersListBottomSheet(BaseFragment baseFragment, ArrayList<Long> selectedDialogs) {
         super(baseFragment.getParentActivity(), false);
         fixNavigationBar();
         this.selectedDialogs = selectedDialogs;
@@ -336,6 +335,12 @@ public class FiltersListBottomSheet extends BottomSheet implements NotificationC
             }
         }
         return result;
+    }
+
+    public static ArrayList<MessagesController.DialogFilter> getCanAddDialogFilters(BaseFragment fragment, Long dialogId) {
+        ArrayList<Long> arrays = new ArrayList<>(1);
+        arrays.add(dialogId);
+        return getCanAddDialogFilters(fragment, arrays);
     }
 
     public static ArrayList<Long> getDialogsCount(BaseFragment fragment, MessagesController.DialogFilter filter, ArrayList<Long> selectedDialogs, boolean always, boolean check) {
