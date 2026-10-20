@@ -56,6 +56,8 @@ public class SlideChooseView extends View {
     private final Theme.ResourcesProvider resourcesProvider;
 
     private boolean touchWasClose = false;
+    
+    public boolean touchEnabled = true;
 
     public SlideChooseView(Context context) {
         this(context, null);
@@ -138,6 +140,7 @@ public class SlideChooseView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (!touchEnabled) return false;
         float x = event.getX();
         float y = event.getY();
         float indexTouch = MathUtils.clamp((x - sideSide + circleSize / 2f) / (lineSize + gapSize * 2 + circleSize), 0, optionsStr.length - 1);
