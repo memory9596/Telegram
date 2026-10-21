@@ -1864,6 +1864,7 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
         TLRPC.TL_chatBannedRights bannedRights;
         TLRPC.TL_chatAdminRights adminRights;
         String rank;
+        int joined;
         if (participant instanceof TLRPC.ChannelParticipant) {
             TLRPC.ChannelParticipant channelParticipant = (TLRPC.ChannelParticipant) participant;
             peerId = MessageObject.getPeerId(channelParticipant.peer);
@@ -1872,6 +1873,7 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
             adminRights = channelParticipant.admin_rights;
             date = channelParticipant.date;
             rank = channelParticipant.rank;
+            joined = date;
         } else if (participant instanceof TLRPC.ChatParticipant) {
             TLRPC.ChatParticipant chatParticipant = (TLRPC.ChatParticipant) participant;
             peerId = chatParticipant.user_id;
@@ -1880,6 +1882,7 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
             bannedRights = null;
             adminRights = null;
             rank = "";
+            joined = date;
         } else {
             peerId = 0;
             canEdit = false;
@@ -1887,6 +1890,7 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
             adminRights = null;
             date = 0;
             rank = null;
+            joined = 0;
         }
         if (peerId == 0 || peerId == getUserConfig().getClientUserId()) {
             return false;
@@ -1903,14 +1907,14 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
             }
 
             boolean result = allowSetAdmin || (ChatObject.canBlockUsers(currentChat) && canEditAdmin);
-            if (resultOnly || !result) {
+            if (resultOnly || !result && joined == 0) {
                 return result;
             }
 
             Utilities.Callback<Integer> openRightsFor = action ->
                 openRightsEdit2(peerId, date, participant, adminRights, bannedRights, rank, canEditAdmin, action, false);
 
-            ItemOptions.makeOptions(this, view)
+            ItemOptions io = ItemOptions.makeOptions(this, view)
                 .setScrimViewBackground(listView.getClipBackground(view))
                 .addIf(allowSetAdmin, R.drawable.msg_admins, editingAdmin ? getString(R.string.EditAdminRights) : getString(R.string.SetAsAdmin), () -> openRightsFor.run(0))
                 .addIf(canChangePermission, R.drawable.msg_permissions, getString("ChangePermissions", R.string.ChangePermissions), () -> {
@@ -1934,8 +1938,12 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
                         BulletinFactory.createRemoveFromChatBulletin(this, user, currentChat.title).show();
                     }
                 })
-                .setMinWidth(190)
-                .show();
+                .setMinWidth(190);
+            if (joined != 0) {
+                if (result) io.addGap();
+                io.addText(LocaleController.formatJoined(joined), 13);
+            }
+            io.show();
         } else {
 
             ItemOptions options = ItemOptions.makeOptions(this, view);
@@ -2006,7 +2014,7 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
             options.setMinWidth(190);
 
             boolean result = options.getItemsCount() > 0;
-            if (resultOnly || !result) {
+            if (resultOnly || !result && joined == 0) {
                 return result;
             }
 
@@ -3441,10 +3449,10 @@ public class ChatUsersActivity extends BaseFragment implements NotificationCente
                     boolean showJoined = false;
                     if (position >= participantsStartRow && position < participantsEndRow) {
                         lastRow = participantsEndRow;
-                        showJoined = ChatObject.isChannel(currentChat) && !currentChat.megagroup;
+                        showJoined = ChatObject.isChannel(currentChat);
                     } else if (position >= contactsStartRow && position < contactsEndRow) {
                         lastRow = contactsEndRow;
-                        showJoined = ChatObject.isChannel(currentChat) && !currentChat.megagroup;
+                        showJoined = ChatObject.isChannel(currentChat);
                     } else {
                         lastRow = botEndRow;
                     }
