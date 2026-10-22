@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TMessagesProj\src\main\java\org\telegram\ui\ChatRightsEditActivity.java -->
+    <!-- TMessagesProj\src\main\java\org\telegram\ui\ChatUsersActivity.java -->
+    <string name="UserRestrictionsSendStickers2">Send Stickers</string>
+    <string name="UserRestrictionsSendGifs">Send GIFs</string>
+    <string name="UserRestrictionsSendGames">Send Games</string>
+    <string name="UserRestrictionsSendInline">Send Inline Content</string>
+</resources>

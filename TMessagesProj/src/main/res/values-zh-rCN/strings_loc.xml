@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TMessagesProj\src\main\java\org\telegram\ui\ChatRightsEditActivity.java -->
+    <!-- TMessagesProj\src\main\java\org\telegram\ui\ChatUsersActivity.java -->
+    <string name="UserRestrictionsSendStickers2">贴纸</string>
+    <string name="UserRestrictionsSendGifs">GIF</string>
+    <string name="UserRestrictionsSendGames">游戏</string>
+    <string name="UserRestrictionsSendInline">机器人内容</string>
+</resources>
