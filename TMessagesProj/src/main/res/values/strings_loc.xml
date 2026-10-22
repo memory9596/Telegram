@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="UserRestrictionsSendStickers2">Send Stickers</string>
+    <string name="UserRestrictionsSendGifs">Send GIFs</string>
+    <string name="UserRestrictionsSendGames">Send Games</string>
+    <string name="UserRestrictionsSendInline">Send Inline Content</string>
+</resources>

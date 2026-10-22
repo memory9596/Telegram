@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="UserRestrictionsSendStickers2">贴纸</string>
+    <string name="UserRestrictionsSendGifs">GIF</string>
+    <string name="UserRestrictionsSendGames">游戏</string>
+    <string name="UserRestrictionsSendInline">机器人内容</string>
+</resources>
