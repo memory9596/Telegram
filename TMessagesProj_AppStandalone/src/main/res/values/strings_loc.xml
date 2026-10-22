@@ -6,4 +6,7 @@
     <string name="UserRestrictionsSendGifs">Send GIFs</string>
     <string name="UserRestrictionsSendGames">Send Games</string>
     <string name="UserRestrictionsSendInline">Send Inline Content</string>
+    <!-- TMessagesProj\src\main\java\org\telegram\ui\ChatActivity.java -->
+    <string name="Repeat">Repeat</string>
+    <string name="RepeatAsCopy">Repeat as Copy</string>
 </resources>

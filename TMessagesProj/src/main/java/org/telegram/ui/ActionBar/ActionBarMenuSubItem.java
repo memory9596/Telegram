@@ -157,29 +157,40 @@ public class ActionBarMenuSubItem extends FrameLayout {
     }
 
     public void setRightIcon(int icon) {
+        setRightIcon(icon, null);
+    }
+
+    public void setRightIcon(int icon, OnClickListener listener) {
         if (rightIcon == null) {
             rightIcon = new ImageView(getContext());
             rightIcon.setScaleType(ImageView.ScaleType.CENTER);
             rightIcon.setColorFilter(iconColor, PorterDuff.Mode.MULTIPLY);
-            if (LocaleController.isRTL) {
-                rightIcon.setScaleX(-1);
-            }
+            if (LocaleController.isRTL) rightIcon.setScaleX(-1);
             addView(rightIcon, LayoutHelper.createFrame(24, LayoutHelper.MATCH_PARENT, Gravity.CENTER_VERTICAL | (LocaleController.isRTL ? Gravity.LEFT : Gravity.RIGHT)));
         }
-        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) textView.getLayoutParams();
-        if (LocaleController.isRTL) {
-            layoutParams.leftMargin = rightIcon != null ? dp(32) : 0;
-        } else {
-            layoutParams.rightMargin = rightIcon != null ? dp(32) : 0;
-        }
-        textView.setLayoutParams(layoutParams);
-        setPadding(dp(LocaleController.isRTL ? 8 : 18), 0, dp(LocaleController.isRTL ? 18 : 8), 0);
+        setPadding(dp(LocaleController.isRTL ? (listener != null ? 0 : 8) : 18), 0, dp(LocaleController.isRTL ? 18 : (listener != null ? 0 : 8)), 0);
         if (icon == 0) {
             rightIcon.setVisibility(View.GONE);
         } else {
             rightIcon.setVisibility(View.VISIBLE);
             rightIcon.setImageResource(icon);
         }
+        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) textView.getLayoutParams();
+        if (listener != null) {
+            rightIcon.getLayoutParams().width = dp(48);
+            rightIcon.setOnClickListener(listener);
+            rightIcon.setBackground(Theme.createRadSelectorDrawable(selectorColor, 6, 0, 0, 6));
+            int iconWidth = dp(48 + 5);
+            layoutParams.setMargins(LocaleController.isRTL ? iconWidth : 0, 0, LocaleController.isRTL ? 0 : iconWidth, 0);
+        } else {
+            rightIcon.getLayoutParams().width = dp(24);
+            layoutParams.setMargins(0, 0, 0, 0);
+            if (LocaleController.isRTL) layoutParams.leftMargin = dp(32);
+            else layoutParams.rightMargin = dp(32);
+            rightIcon.setOnClickListener(null);
+            rightIcon.setBackground(null);
+        }
+        textView.setLayoutParams(layoutParams);
     }
 
     public void setTextAndIcon(CharSequence text, int icon) {

@@ -1263,6 +1263,9 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_WELCOME_REVERT = 116;
     public final static int OPTION_SEND_MONEY = 117;
 
+    public final static int OPTION_REPEAT = 200;
+    public final static int OPTION_REPEAT_AS_COPY = 201;
+
     private final static int[] allowedNotificationsDuringChatListAnimations = new int[]{
             NotificationCenter.messagesRead,
             NotificationCenter.threadMessagesRead,
@@ -1704,6 +1707,9 @@ public class ChatActivity extends BaseFragment implements
     private final static int chat_menu_topic_create = 73;
 
     private final static int id_chat_compose_panel = 1000;
+
+    private final static int repeat = 2000;
+    private final static int repeat_as_copy = 2001;
 
     RecyclerListView.OnItemLongClickListenerExtended onItemLongClickListener = new RecyclerListView.OnItemLongClickListenerExtended() {
         @Override
@@ -3801,6 +3807,13 @@ public class ChatActivity extends BaseFragment implements
                     createDeleteMessagesAlert(null, null);
                 } else if (id == forward) {
                     openForward(true);
+                } else if (id == repeat) {
+                    boolean noforwards = isPeerNoForwards() || hasSelectedNoforwardsMessage();
+                    repeatMessage(false, noforwards);
+                    clearSelectionMode();
+                } else if (id == repeat_as_copy) {
+                    repeatMessage(false, true);
+                    clearSelectionMode();
                 } else if (id == share) {
                     share();
                 } else if (id == open_direct) {
@@ -10384,6 +10397,10 @@ public class ChatActivity extends BaseFragment implements
             if (!isSavedMessages && getDialogId() != UserObject.VERIFY) {
                 actionModeViews.add(actionMode.addItemWithWidth(forward, R.drawable.msg_forward, dp(48), LocaleController.getString(R.string.Forward)));
             }
+            if (getDialogId() != UserObject.VERIFY) {
+                actionModeViews.add(actionMode.addItemWithWidth(repeat, R.drawable.msg_repeat, dp(48), LocaleController.getString(R.string.Repeat)));
+                actionModeViews.add(actionMode.addItemWithWidth(repeat_as_copy, R.drawable.msg_repeat, dp(48), LocaleController.getString(R.string.RepeatAsCopy)));
+            }
             actionModeViews.add(actionMode.addItemWithWidth(share, R.drawable.msg_shareout, dp(48), LocaleController.getString(R.string.ShareFile)));
             actionModeViews.add(actionMode.addItemWithWidth(delete, R.drawable.msg_delete, dp(48), LocaleController.getString(R.string.Delete)));
         } else {
@@ -12390,6 +12407,434 @@ public class ChatActivity extends BaseFragment implements
         DialogsActivity fragment = new DialogsActivity(args);
         fragment.setDelegate(ChatActivity.this);
         presentFragment(fragment);
+    }
+
+    private boolean canRepeatInChat() {
+        if (UserObject.isService(dialog_id) || dialog_id == UserObject.VERIFY) {
+            return false;
+        }
+        if (currentChat == null) {
+            return true;
+        }
+        if (ChatObject.isChannelAndNotMegaGroup(currentChat) && !ChatObject.canPost(currentChat)) {
+            return false;
+        }
+        return ChatObject.canWriteToChat(currentChat);
+    }
+
+    private void repeatMessage(boolean isLongClick, boolean isRepeatAsCopy) {
+        if (checkSlowMode(chatActivityEnterView.getSendButton())) return;
+        final ArrayList<MessageObject> messages = new ArrayList<>();
+        if (selectedObject != null) {
+            if (selectedObjectGroup != null) messages.addAll(selectedObjectGroup.messages);
+            else messages.add(selectedObject);
+        } else {
+            for (int i = 0; i < 2; i++) {
+                for (int k = 0; k < selectedMessagesIds[i].size(); k++) {
+                    MessageObject obj = selectedMessagesIds[i].valueAt(k);
+                    if (obj != null) messages.add(obj);
+                }
+            }
+        }
+        doRepeatMessage(isLongClick, messages, isRepeatAsCopy);
+    }
+
+    private void doRepeatMessage(boolean isLongClick, ArrayList<MessageObject> messages, boolean isRepeatAsCopy) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+        boolean noforwards = isPeerNoForwards();
+        if (selectedObject != null && selectedObject.messageOwner != null && selectedObject.messageOwner.noforwards) {
+            noforwards = true;
+        }
+        if (isLongClick || noforwards) {
+            MessageObject replyTo = selectedObject != null
+                    ? selectedObject
+                    : (messages.size() == 1 ? messages.get(0) : null);
+            if (noforwards) {
+                doRepeatAsText(messages, isLongClick);
+                return;
+            }
+            repeatWithMediaAndReply(messages, replyTo, false);
+            return;
+        }
+        forwardMessages(messages, isRepeatAsCopy, false, true, 0, 0);
+    }
+
+    private void doRepeatAsText(ArrayList<MessageObject> messages, boolean isLongClick) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+        ArrayList<ArrayList<MessageObject>> buckets = new ArrayList<>();
+        HashMap<Long, ArrayList<MessageObject>> groupMap = new HashMap<>();
+        for (MessageObject msg : messages) {
+            if (msg == null) continue;
+            long gid = msg.getGroupId();
+            if (gid != 0) {
+                ArrayList<MessageObject> bucket = groupMap.get(gid);
+                if (bucket == null) {
+                    bucket = new ArrayList<>();
+                    groupMap.put(gid, bucket);
+                    buckets.add(bucket);
+                }
+                bucket.add(msg);
+            } else {
+                ArrayList<MessageObject> bucket = new ArrayList<>();
+                bucket.add(msg);
+                buckets.add(bucket);
+            }
+        }
+        for (ArrayList<MessageObject> bucket : buckets) {
+            CharSequence caption = null;
+            MessageObject captionMsg = null;
+            MessageObject replyTo = null;
+            for (MessageObject msg : bucket) {
+                CharSequence cap = msg.caption;
+                if (TextUtils.isEmpty(cap) && msg.messageOwner != null && bucket.size() == 1) {
+                    cap = msg.messageOwner.message;
+                }
+                if (!TextUtils.isEmpty(cap)) {
+                    caption = cap;
+                    captionMsg = msg;
+                    break;
+                }
+            }
+            if (isLongClick) {
+                replyTo = captionMsg != null ? captionMsg : bucket.get(0);
+            }
+            if (!TextUtils.isEmpty(caption)) {
+                MessageObject firstMsg = bucket.get(0);
+                TLRPC.WebPage webPage = null;
+                boolean searchLinks = false;
+                if (firstMsg.messageOwner != null && firstMsg.messageOwner.media instanceof TLRPC.TL_messageMediaWebPage) {
+                    TLRPC.TL_messageMediaWebPage mwp = (TLRPC.TL_messageMediaWebPage) firstMsg.messageOwner.media;
+                    TLRPC.WebPage wp = mwp.webpage;
+                    if (!mwp.manual && wp != null && !(wp instanceof TLRPC.TL_webPageEmpty) && !(wp instanceof TLRPC.TL_webPagePending)) {
+                        webPage = wp;
+                        searchLinks = true;
+                    }
+                }
+                ArrayList<TLRPC.MessageEntity> entities = null;
+                if (captionMsg != null && captionMsg.messageOwner != null) {
+                    entities = captionMsg.messageOwner.entities;
+                } else if (firstMsg.messageOwner != null) {
+                    entities = firstMsg.messageOwner.entities;
+                }
+                SendMessagesHelper.SendMessageParams params = SendMessagesHelper.SendMessageParams.of(
+                        caption.toString(), dialog_id, replyTo,
+                        isThreadChat() ? getThreadMessage() : null,
+                        webPage, searchLinks,
+                        entities,
+                        null, null, true, 0, 0, null, false);
+                getSendMessagesHelper().sendMessage(params);
+            }
+        }
+    }
+
+    private void repeatWithMediaAndReply(ArrayList<MessageObject> messages, MessageObject replyTo, boolean isRepeatAsCopy) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+        ArrayList<MessageObject> fallback = new ArrayList<>();
+        boolean replyUsed = false;
+        ArrayList<ArrayList<MessageObject>> buckets = new ArrayList<>();
+        HashMap<Long, ArrayList<MessageObject>> groupMap = new HashMap<>();
+        for (MessageObject msg : messages) {
+            long gid = msg.getGroupId();
+            if (gid != 0) {
+                ArrayList<MessageObject> bucket = groupMap.get(gid);
+                if (bucket == null) {
+                    bucket = new ArrayList<>();
+                    groupMap.put(gid, bucket);
+                    buckets.add(bucket);
+                }
+                bucket.add(msg);
+            } else {
+                ArrayList<MessageObject> bucket = new ArrayList<>();
+                bucket.add(msg);
+                buckets.add(bucket);
+            }
+        }
+        for (ArrayList<MessageObject> bucket : buckets) {
+            MessageObject bucketReplyTo = replyTo != null
+                    ? (!replyUsed ? replyTo : null)
+                    : getBucketReplyMessage(bucket);
+            boolean groupedSent = false;
+            if (bucket.size() > 1 && canSendGroupedMediaByReference(bucket)) {
+                groupedSent = sendRepeatGroupedMedia(bucket, bucketReplyTo);
+                if (groupedSent && replyTo != null) {
+                    replyUsed = true;
+                }
+            }
+            if (!groupedSent) {
+                MessageObject bucketReply = replyTo != null
+                        ? (!replyUsed ? replyTo : null)
+                        : getBucketReplyMessage(bucket);
+                for (MessageObject msg : bucket) {
+                    MessageObject thisReplyTo = replyTo != null
+                            ? (!replyUsed ? replyTo : null)
+                            : bucketReply;
+                    if (sendRepeatMessage(msg, thisReplyTo)) {
+                        if (replyTo != null) {
+                            replyUsed = true;
+                        }
+                    } else {
+                        fallback.add(msg);
+                    }
+                }
+            }
+        }
+        if (!fallback.isEmpty()) {
+            forwardMessages(fallback, isRepeatAsCopy, false, true, 0, 0);
+        }
+    }
+
+    private MessageObject getBucketReplyMessage(ArrayList<MessageObject> bucket) {
+        if (bucket == null || bucket.isEmpty()) {
+            return null;
+        }
+        if (bucket.size() == 1) {
+            return bucket.get(0);
+        }
+        for (MessageObject msg : bucket) {
+            if (msg != null && msg.messageOwner != null
+                    && (!TextUtils.isEmpty(msg.messageOwner.message)
+                    || (msg.messageOwner.entities != null && !msg.messageOwner.entities.isEmpty()))) {
+                return msg;
+            }
+        }
+        return bucket.get(0);
+    }
+
+    private boolean canSendGroupedMediaByReference(ArrayList<MessageObject> group) {
+        if (group == null || group.isEmpty() || group.size() > 10) {
+            return false;
+        }
+        for (MessageObject msg : group) {
+            if (msg == null || msg.messageOwner == null) {
+                return false;
+            }
+            if (msg.isSticker() || msg.isAnimatedSticker() || msg.isRoundVideo()) {
+                return false;
+            }
+            if (!(msg.isPhoto() || msg.isVideo() || msg.isGif())) {
+                return false;
+            }
+            TLRPC.MessageMedia media = msg.messageOwner.media;
+            if (media == null) {
+                return false;
+            }
+            boolean photoOk = media.photo instanceof TLRPC.TL_photo
+                    && ((TLRPC.TL_photo) media.photo).access_hash != 0;
+            boolean documentOk = media.document instanceof TLRPC.TL_document
+                    && ((TLRPC.TL_document) media.document).access_hash != 0;
+            if (!photoOk && !documentOk) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean sendRepeatGroupedMedia(ArrayList<MessageObject> group, MessageObject replyTo) {
+        if (!canSendGroupedMediaByReference(group)) {
+            return false;
+        }
+        final long groupId = Utilities.random.nextLong(); 
+        final MessageObject topMsg = isThreadChat() ? getThreadMessage() : null;
+        final long monoPeer = getSendMonoForumPeerId();
+        int captionIndex = -1;
+        MessageObject captionMsg = null;
+        for (int i = 0; i < group.size(); i++) {
+            MessageObject m = group.get(i);
+            if (m != null && m.messageOwner != null
+                    && (!TextUtils.isEmpty(m.messageOwner.message)
+                    || (m.messageOwner.entities != null && !m.messageOwner.entities.isEmpty()))) {
+                captionMsg = m;
+                captionIndex = i;
+                break;
+            }
+        }
+        for (int i = 0; i < group.size(); i++) {
+            MessageObject msg = group.get(i);
+            TLRPC.MessageMedia media = msg.messageOwner.media;
+            boolean isFirst = i == 0;
+            boolean isLast = i == group.size() - 1;
+            MessageObject thisReplyTo = isFirst ? replyTo : null;
+            boolean useCaption = i == captionIndex;
+            String caption = useCaption && captionMsg != null ? captionMsg.messageOwner.message : null;
+            ArrayList<TLRPC.MessageEntity> entities =
+                    useCaption && captionMsg != null ? captionMsg.messageOwner.entities : null;
+            boolean spoiler = msg.hasMediaSpoilers();
+            SendMessagesHelper.SendMessageParams p;
+            if (media.photo instanceof TLRPC.TL_photo) {
+                p = SendMessagesHelper.SendMessageParams.of(
+                        (TLRPC.TL_photo) media.photo, null,
+                        dialog_id, thisReplyTo, topMsg,
+                        caption, entities,
+                        null, null, true, 0, 0, 0,
+                        null, false, spoiler);
+            } else if (media.document instanceof TLRPC.TL_document) {
+                p = SendMessagesHelper.SendMessageParams.of(
+                        (TLRPC.TL_document) media.document, null, null,
+                        dialog_id, thisReplyTo, topMsg,
+                        caption, entities,
+                        null, null, true, 0, 0, 0,
+                        null, null, false, spoiler);
+            } else {
+                return false;
+            }
+            HashMap<String, String> sendParams = new HashMap<>();
+            sendParams.put("groupId", String.valueOf(groupId));
+            if (isLast) {
+                sendParams.put("final", "1");
+            }
+            p.params = sendParams;
+            p.monoForumPeer = monoPeer;
+            p.suggestionParams = isFirst && msg.messageOwner.suggested_post != null
+                    ? MessageSuggestionParams.of(msg.messageOwner.suggested_post)
+                    : null;
+            getSendMessagesHelper().sendMessage(p);
+        }
+        return true;
+    }
+
+    private boolean sendRepeatMessage(MessageObject msg, MessageObject replyTo) {
+        if (msg == null || msg.messageOwner == null) {
+            return false;
+        }
+        if (DialogObject.isEncryptedDialog(dialog_id)) {
+            return false;
+        }
+        if (msg.isRoundVideo()) {
+            return false;
+        }
+        final TLRPC.MessageMedia media = msg.messageOwner.media;
+        final MessageObject topMsg = isThreadChat() ? getThreadMessage() : null;
+        final long monoPeer = getSendMonoForumPeerId();
+        final MessageSuggestionParams suggestionParams =
+                msg.messageOwner.suggested_post != null
+                        ? MessageSuggestionParams.of(msg.messageOwner.suggested_post)
+                        : null;
+        if (media != null
+                && !(media instanceof TLRPC.TL_messageMediaEmpty)
+                && !(media instanceof TLRPC.TL_messageMediaWebPage)
+                && !(media instanceof TLRPC.TL_messageMediaGame)
+                && !(media instanceof TLRPC.TL_messageMediaInvoice)) {
+            if (media.photo instanceof TLRPC.TL_photo
+                    && ((TLRPC.TL_photo) media.photo).access_hash != 0) {
+                SendMessagesHelper.SendMessageParams p = SendMessagesHelper.SendMessageParams.of(
+                        (TLRPC.TL_photo) media.photo, null,
+                        dialog_id, replyTo, topMsg,
+                        msg.messageOwner.message,
+                        msg.messageOwner.entities,
+                        null, null, true, 0, 0, 0,
+                        null, false, msg.hasMediaSpoilers());
+                p.monoForumPeer = monoPeer;
+                p.suggestionParams = suggestionParams;
+                getSendMessagesHelper().sendMessage(p);
+                return true;
+            }
+            if (media.document instanceof TLRPC.TL_document
+                    && ((TLRPC.TL_document) media.document).access_hash != 0) {
+                TLRPC.TL_document doc = (TLRPC.TL_document) media.document;
+                if (MessageObject.isStickerDocument(doc)
+                        || MessageObject.isAnimatedStickerDocument(doc, true)) {
+                    String query = MessageObject.findAnimatedEmojiEmoticon(doc);
+                    getSendMessagesHelper().sendSticker(
+                            doc, query, dialog_id,
+                            null, null,
+                            replyTo, topMsg,
+                            null, null, null,
+                            true, 0, 0,
+                            false, null,
+                            getMessageChatSendParams(),
+                            0, monoPeer, suggestionParams,
+                            false);
+                    return true;
+                }
+                SendMessagesHelper.SendMessageParams p = SendMessagesHelper.SendMessageParams.of(
+                        doc, null, null,
+                        dialog_id, replyTo, topMsg,
+                        msg.messageOwner.message,
+                        msg.messageOwner.entities,
+                        null, null, true, 0, 0, 0,
+                        null, null, false,
+                        msg.hasMediaSpoilers());
+                p.monoForumPeer = monoPeer;
+                p.suggestionParams = suggestionParams;
+                getSendMessagesHelper().sendMessage(p);
+                return true;
+            }
+            if (media instanceof TLRPC.TL_messageMediaVenue
+                    || media instanceof TLRPC.TL_messageMediaGeo) {
+                SendMessagesHelper.SendMessageParams p = SendMessagesHelper.SendMessageParams.of(
+                        media, dialog_id, replyTo, topMsg, null, null, true, 0, 0);
+                p.monoForumPeer = monoPeer;
+                getSendMessagesHelper().sendMessage(p);
+                return true;
+            }
+            if (media.phone_number != null) {
+                TLRPC.User user = new TLRPC.TL_userContact_old2();
+                user.phone = media.phone_number;
+                user.first_name = media.first_name;
+                user.last_name = media.last_name;
+                user.id = media.user_id;
+                SendMessagesHelper.SendMessageParams p = SendMessagesHelper.SendMessageParams.of(
+                        user, dialog_id, replyTo, topMsg, null, null, true, 0, 0);
+                p.monoForumPeer = monoPeer;
+                getSendMessagesHelper().sendMessage(p);
+                return true;
+            }
+        }
+        if (media instanceof TLRPC.TL_messageMediaPoll) {
+            SendMessagesHelper.SendMessageParams p = SendMessagesHelper.SendMessageParams.of(
+                    (TLRPC.TL_messageMediaPoll) media,
+                    dialog_id, replyTo, topMsg, null, null, true, 0, 0);
+            p.caption = msg.messageOwner.message;
+            p.entities = msg.messageOwner.entities;
+            p.monoForumPeer = monoPeer;
+            p.suggestionParams = suggestionParams;
+            getSendMessagesHelper().sendMessage(p);
+            return true;
+        }
+        if (media instanceof TLRPC.TL_messageMediaToDo) {
+            SendMessagesHelper.SendMessageParams p = SendMessagesHelper.SendMessageParams.of(
+                    (TLRPC.TL_messageMediaPoll) null,
+                    dialog_id, replyTo, topMsg, null, null, true, 0, 0);
+            p.todo = (TLRPC.TL_messageMediaToDo) media;
+            p.caption = msg.messageOwner.message;
+            p.entities = msg.messageOwner.entities;
+            p.monoForumPeer = monoPeer;
+            p.suggestionParams = suggestionParams;
+            getSendMessagesHelper().sendMessage(p);
+            return true;
+        }
+        TLRPC.WebPage webPage = null;
+        boolean searchLinks = false;
+        if (media instanceof TLRPC.TL_messageMediaWebPage) {
+            TLRPC.TL_messageMediaWebPage mwp = (TLRPC.TL_messageMediaWebPage) media;
+            TLRPC.WebPage wp = mwp.webpage;
+            if (!mwp.manual
+                    && wp != null
+                    && !(wp instanceof TLRPC.TL_webPageEmpty)
+                    && !(wp instanceof TLRPC.TL_webPagePending)) {
+                webPage = wp;
+                searchLinks = true;
+            }
+        }
+        if (msg.messageOwner.message != null) {
+            SendMessagesHelper.SendMessageParams p = SendMessagesHelper.SendMessageParams.of(
+                    msg.messageOwner.message,
+                    dialog_id, replyTo, topMsg,
+                    webPage, searchLinks,
+                    msg.messageOwner.entities,
+                    null, null, true, 0, 0, null, false);
+            p.monoForumPeer = monoPeer;
+            p.suggestionParams = suggestionParams;
+            getSendMessagesHelper().sendMessage(p);
+            return true;
+        }
+        return false;
     }
 
     public void showBottomOverlayProgress(boolean show, boolean animated) {
@@ -19296,6 +19741,49 @@ public class ChatActivity extends BaseFragment implements
                 ActionBarMenuItem shareItem = actionBar.createActionMode().getItem(share);
 
                 boolean noforwards = isPeerNoForwards() || hasSelectedNoforwardsMessage();
+                ActionBarMenuItem repeatItem = actionBar.createActionMode().getItem(repeat);
+                ActionBarMenuItem repeatAsCopyItem = actionBar.createActionMode().getItem(repeat_as_copy);
+                boolean canRepeat = canRepeatInChat();
+                if (repeatItem != null && repeatAsCopyItem != null) {
+                    if (!canRepeat) {
+                        repeatItem.setVisibility(View.GONE);
+                        repeatAsCopyItem.setVisibility(View.GONE);
+                    } else if (noforwards) {
+                        boolean hasText = false;
+                        for (int i = 0; i < 2; i++) {
+                            for (int k = 0; k < selectedMessagesIds[i].size(); k++) {
+                                MessageObject obj = selectedMessagesIds[i].valueAt(k);
+                                if (obj != null && (!TextUtils.isEmpty(obj.caption) || !TextUtils.isEmpty(obj.messageOwner.message))) {
+                                    hasText = true;
+                                    break;
+                                }
+                            }
+                        }
+                        repeatItem.setVisibility(View.GONE);
+                        repeatAsCopyItem.setVisibility(hasText ? View.VISIBLE : View.GONE);
+                        repeatAsCopyItem.setText(LocaleController.getString(R.string.RepeatAsCopy));
+                        repeatAsCopyItem.setOnLongClickListener(v -> {
+                            repeatMessage(true, true);
+                            clearSelectionMode();
+                            return true;
+                        });
+                    } else {
+                        repeatItem.setVisibility(View.VISIBLE);
+                        repeatAsCopyItem.setVisibility(View.VISIBLE);
+                        repeatItem.setText(LocaleController.getString(R.string.Repeat));
+                        repeatAsCopyItem.setText(LocaleController.getString(R.string.RepeatAsCopy));
+                        repeatItem.setOnLongClickListener(v -> {
+                            repeatMessage(true, false);
+                            clearSelectionMode();
+                            return true;
+                        });
+                        repeatAsCopyItem.setOnLongClickListener(v -> {
+                            repeatMessage(true, true);
+                            clearSelectionMode();
+                            return true;
+                        });
+                    }
+                }
                 if (prevCantForwardCount == 0 && cantForwardMessagesCount != 0 || prevCantForwardCount != 0 && cantForwardMessagesCount == 0) {
                     forwardButtonAnimation = new AnimatorSet();
                     ArrayList<Animator> animators = new ArrayList<>();
@@ -31168,7 +31656,7 @@ public class ChatActivity extends BaseFragment implements
             final boolean isReactionsAvailableFinal = !suggestEdit && isReactionsAvailable;
 
             int flags = 0;
-            if (isReactionsViewAvailable || showMessageSeen || showSponsorInfo) {
+            if (isReactionsViewAvailable || showMessageSeen || showSponsorInfo || options.contains(OPTION_REPEAT)) {
                 flags |= ActionBarPopupWindow.ActionBarPopupWindowLayout.FLAG_USE_SWIPEBACK;
             }
 
@@ -31939,6 +32427,75 @@ public class ChatActivity extends BaseFragment implements
                     cell.setMinimumWidth(AndroidUtilities.dp(200));
                     cell.setTextAndIcon(items.get(a), icons.get(a));
 
+                    if (option == OPTION_REPEAT) {
+                        ActionBarPopupWindow.ActionBarPopupWindowLayout repeatPopupLayout = new ActionBarPopupWindow.ActionBarPopupWindowLayout(getParentActivity(), 0, themeDelegate, 0);
+                        repeatPopupLayout.setFitItems(true);
+                        repeatPopupLayout.setBackground(scrimBlur3Factory.create(repeatPopupLayout, true)
+                                .setColorProvider(BlurredBackgroundProviderImpl.messageMenuBackground(themeDelegate))
+                                .setRadius(dp(12))
+                                .setPadding(dp(8)));
+                        repeatPopupLayout.setClipToOutline(true);
+                        ActionBarMenuSubItem backItem = new ActionBarMenuSubItem(getParentActivity(), false, false, themeDelegate);
+                        backItem.setTextAndIcon(LocaleController.getString(R.string.Back), R.drawable.msg_arrow_back);
+                        backItem.setMinimumWidth(AndroidUtilities.dp(196));
+                        backItem.setOnClickListener(view -> popupLayout.getSwipeBack().closeForeground());
+                        repeatPopupLayout.addView(backItem);
+                        ActionBarPopupWindow.GapView gap = new ActionBarPopupWindow.GapView(getContext(), themeDelegate, Theme.key_actionBarDefaultSubmenuSeparator);
+                        gap.setTag(R.id.fit_width_tag, 1); 
+                        repeatPopupLayout.addView(gap, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 8));
+                        ActionBarMenuSubItem asCopyItem = new ActionBarMenuSubItem(getParentActivity(), false, false, themeDelegate);
+                        asCopyItem.setTextAndIcon(LocaleController.getString(R.string.RepeatAsCopy), R.drawable.msg_repeat);
+                        asCopyItem.setMinimumWidth(AndroidUtilities.dp(196));
+                        asCopyItem.setOnClickListener(view -> {
+                            popupLayout.getSwipeBack().closeForeground();
+                            closeMenu();
+                            repeatMessage(false, true);
+                        });
+                        asCopyItem.setOnLongClickListener(view -> {
+                            popupLayout.getSwipeBack().closeForeground();
+                            closeMenu();
+                            repeatMessage(true, true);
+                            return true;
+                        });
+                        repeatPopupLayout.addView(asCopyItem);
+                        popupLayout.getSwipeBack().setForegroundColor(0x01000000); 
+                        int swipeBackIndex = popupLayout.addViewToSwipeBack(repeatPopupLayout);
+                        Runnable openSwipeBackAction = () -> {
+                            cell.setPressed(false);
+                            if (cell.getRightIcon() != null) cell.getRightIcon().setVisibility(View.GONE);
+                            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) repeatPopupLayout.getLayoutParams();
+                            lp.width = popupLayout.getMeasuredWidth();
+                            lp.gravity = Gravity.TOP | Gravity.LEFT;
+                            repeatPopupLayout.setLayoutParams(lp);
+                            repeatPopupLayout.measure(
+                                    View.MeasureSpec.makeMeasureSpec(popupLayout.getMeasuredWidth(), View.MeasureSpec.EXACTLY),
+                                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+                            );
+                            int menuHeight = repeatPopupLayout.getMeasuredHeight();
+                            popupLayout.getSwipeBack().setNewForegroundHeight(swipeBackIndex, menuHeight, false);
+                            int offsetY = Math.max(0, cell.getTop());
+                            popupLayout.getSwipeBack().setForegroundOffsetY(swipeBackIndex, offsetY);
+                            popupLayout.getSwipeBack().openForeground(swipeBackIndex);
+                            AndroidUtilities.runOnUIThread(() -> {
+                                if (cell.getRightIcon() != null) cell.getRightIcon().setVisibility(View.VISIBLE);
+                            }, 300);
+                        };
+                        cell.setRightIcon(R.drawable.msg_arrowright, view -> openSwipeBackAction.run());
+                        cell.setOnClickListener(view -> openSwipeBackAction.run());
+                        cell.setOnLongClickListener(view -> {
+                            closeMenu();
+                            repeatMessage(true, true);
+                            return true;
+                        });
+                    }
+
+                    if (option == OPTION_REPEAT_AS_COPY) {
+                        cell.setOnLongClickListener(view -> {
+                            closeMenu();
+                            repeatMessage(true, true);
+                            return true;
+                        });
+                    }
 
                     if (option == OPTION_WELCOME_REVERT) {
                         cell.setSubtext(getString(R.string.WelcomeMessageRevertInfo));
@@ -33484,6 +34041,14 @@ public class ChatActivity extends BaseFragment implements
                 DialogsActivity fragment = new DialogsActivity(args);
                 fragment.setDelegate(this);
                 presentFragment(fragment);
+                break;
+            }
+            case OPTION_REPEAT: {
+                repeatMessage(false, false);
+                break;
+            }
+            case OPTION_REPEAT_AS_COPY: {
+                repeatMessage(false, true);
                 break;
             }
             case OPTION_COPY: {
@@ -46357,6 +46922,23 @@ public class ChatActivity extends BaseFragment implements
                     items.add(LocaleController.getString(R.string.Forward));
                     options.add(OPTION_FORWARD);
                     icons.add(R.drawable.msg_forward);
+                }
+                if (canRepeatInChat()) {
+                    if (noforwards) {
+                        CharSequence repeatCaption = getMessageCaption(selectedObject, selectedObjectGroup);
+                        if (TextUtils.isEmpty(repeatCaption) && selectedObject.messageOwner != null) {
+                            repeatCaption = selectedObject.messageOwner.message;
+                        }
+                        if (!TextUtils.isEmpty(repeatCaption)) {
+                            items.add(LocaleController.getString(R.string.RepeatAsCopy));
+                            options.add(OPTION_REPEAT_AS_COPY);
+                            icons.add(R.drawable.msg_repeat);
+                        }
+                    } else {
+                        items.add(LocaleController.getString(R.string.Repeat));
+                        options.add(OPTION_REPEAT);
+                        icons.add(R.drawable.msg_repeat);
+                    }
                 }
                 if (allowUnpin) {
                     items.add(LocaleController.getString(R.string.UnpinMessage));

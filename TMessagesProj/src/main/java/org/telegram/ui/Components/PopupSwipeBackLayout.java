@@ -63,6 +63,9 @@ public class PopupSwipeBackLayout extends FrameLayout {
 
     private Rect hitRect = new Rect();
 
+    private int foregroundOffsetY = 0;
+    private final SparseIntArray foregroundOffsetIndex = new SparseIntArray();
+
     public PopupSwipeBackLayout(@NonNull Context context, Theme.ResourcesProvider resourcesProvider) {
         super(context);
         this.resourcesProvider = resourcesProvider;
@@ -180,6 +183,7 @@ public class PopupSwipeBackLayout extends FrameLayout {
         backgroundView.setScaleY(bSc);
         if (foregroundView != null) {
             foregroundView.setTranslationX((1f - transitionProgress) * getWidth());
+            foregroundView.setTranslationY(foregroundOffsetY * transitionProgress);
         }
         invalidateVisibility();
 
@@ -345,6 +349,7 @@ public class PopupSwipeBackLayout extends FrameLayout {
         }
         currentForegroundIndex = viewIndex;
         overrideForegroundHeight = overrideHeightIndex.get(viewIndex);
+        foregroundOffsetY = foregroundOffsetIndex.get(viewIndex);
         animateToState(1, 0);
     }
 
@@ -429,6 +434,7 @@ public class PopupSwipeBackLayout extends FrameLayout {
         int s = canvas.save();
         mPath.rewind();
         int rad = AndroidUtilities.dp(12);
+        y += foregroundOffsetY * transitionProgress;
         if (stickToRight) {
             mRect.set(getWidth() - w, y, getWidth(), y + h);
         } else {
@@ -529,6 +535,14 @@ public class PopupSwipeBackLayout extends FrameLayout {
             foregroundAnimator = animator;
         } else {
             overrideForegroundHeight = height;
+            invalidateTransforms();
+        }
+    }
+
+    public void setForegroundOffsetY(int viewIndex, int offsetY) {
+        foregroundOffsetIndex.put(viewIndex, offsetY);
+        if (viewIndex == currentForegroundIndex) {
+            foregroundOffsetY = offsetY;
             invalidateTransforms();
         }
     }

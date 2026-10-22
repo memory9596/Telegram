@@ -6,4 +6,7 @@
     <string name="UserRestrictionsSendGifs">GIF</string>
     <string name="UserRestrictionsSendGames">游戏</string>
     <string name="UserRestrictionsSendInline">机器人内容</string>
+    <!-- TMessagesProj\src\main\java\org\telegram\ui\ChatActivity.java -->
+    <string name="Repeat">复读</string>
+    <string name="RepeatAsCopy">无引用复读</string>
 </resources>
