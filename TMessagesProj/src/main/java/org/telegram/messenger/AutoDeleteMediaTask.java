@@ -64,9 +64,9 @@ public class AutoDeleteMediaTask {
             long deletedFilesBySizeSize = 0;
             int skippedFiles = 0;
 
-            //if (!allKeepMediaTypesForever) {
+            final SparseArray<File> paths = ImageLoader.getInstance().createMediaPaths();
+            if (!allKeepMediaTypesForever) {
                 //long currentTime = time - 60 * 60 * 24 * days;
-                final SparseArray<File> paths = ImageLoader.getInstance().createMediaPaths();
                 for (int a = 0; a < paths.size(); a++) {
                     if (allKeepMediaTypesForever && (paths.keyAt(a) == FileLoader.MEDIA_DIR_AUDIO || paths.keyAt(a) == FileLoader.MEDIA_DIR_DOCUMENT)) {
                         continue;
@@ -137,7 +137,7 @@ public class AutoDeleteMediaTask {
                         FileLog.e(e);
                     }
                 }
-            //}
+            }
 
             int maxCacheGb = SharedConfig.getPreferences().getInt("cache_limit", Integer.MAX_VALUE);
             if (maxCacheGb != Integer.MAX_VALUE) {
