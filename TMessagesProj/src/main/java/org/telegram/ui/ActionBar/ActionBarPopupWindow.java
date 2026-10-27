@@ -112,6 +112,7 @@ public class ActionBarPopupWindow extends PopupWindow {
         private OnDispatchKeyEventListener mOnDispatchKeyEventListener;
         private float backScaleX = 1;
         private float backScaleY = 1;
+        public float backOffsetY = 0;
         private boolean startAnimationPending = false;
         private int backAlpha = 255;
         private int lastStartedChild = 0;
@@ -490,7 +491,8 @@ public class ActionBarPopupWindow extends PopupWindow {
                         canvas.clipRect(0, bgPaddings.top, getMeasuredWidth(), getMeasuredHeight());
                     }
                     backgroundDrawable.setAlpha(applyAlpha ? backAlpha : 255);
-                    if (shownFromBottom) {
+                    boolean pinSwipeBackScrim = swipeBackLayout != null && swipeBackLayout.isCurrentForegroundPinningScrim();
+                    if (shownFromBottom && !pinSwipeBackScrim) {
                         final int height = getMeasuredHeight();
                         AndroidUtilities.rectTmp2.set(0, (int) (height * (1.0f - backScaleY)), (int) (getMeasuredWidth() * backScaleX), height);
                     } else {
@@ -530,6 +532,7 @@ public class ActionBarPopupWindow extends PopupWindow {
                         rect.set(AndroidUtilities.rectTmp2.right, AndroidUtilities.rectTmp2.top, AndroidUtilities.rectTmp2.right, AndroidUtilities.rectTmp2.top);
                         AndroidUtilities.lerp(rect, AndroidUtilities.rectTmp2, reactionsEnterProgress, AndroidUtilities.rectTmp2);
                     }
+                    AndroidUtilities.rectTmp2.offset(0, (int) backOffsetY);
                     backgroundDrawable.setBounds(AndroidUtilities.rectTmp2);
                     backgroundDrawable.draw(canvas);
                     if (clipChildren) {
