@@ -13559,7 +13559,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                         if (user != null && !TextUtils.isEmpty(vcardPhone)) {
                             text = PhoneFormat.getInstance().format("+" + vcardPhone);
                             phoneNumber = vcardPhone;
-                        } else if (user != null && !TextUtils.isEmpty(user.phone)) {
+                        } else if (user != null && !TextUtils.isEmpty(user.phone) && !user.self) {
                             text = PhoneFormat.getInstance().format("+" + user.phone);
                             phoneNumber = user.phone;
                         } else {
