@@ -1298,6 +1298,8 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_SEND_MONEY = 117;
     public final static int OPTION_STOP_LIVE_LOCATION = 118;
 
+    public final static int OPTION_REPEAT = 119;
+
     private final static int[] allowedNotificationsDuringChatListAnimations = new int[]{
             NotificationCenter.messagesRead,
             NotificationCenter.threadMessagesRead,
@@ -14969,6 +14971,10 @@ public class ChatActivity extends BaseFragment implements
         });
 
         getConnectionsManager().bindRequestToGuid(linkSearchRequestId, classGuid);
+    }
+
+    private boolean canRepeat() {
+        return selectedObject != null;
     }
 
     private void forwardMessages(ArrayList<MessageObject> arrayList, boolean fromMyName, boolean hideCaption, boolean notify, int scheduleDate, long payStars) {
@@ -32019,7 +32025,7 @@ public class ChatActivity extends BaseFragment implements
             final boolean isReactionsAvailableFinal = !suggestEdit && isReactionsAvailable;
 
             int flags = 0;
-            if (isReactionsViewAvailable || showMessageSeen || showSponsorInfo) {
+            if (isReactionsViewAvailable || showMessageSeen || showSponsorInfo || RepeatMessageMenu.needsSwipeBack(options)) {
                 flags |= ActionBarPopupWindow.ActionBarPopupWindowLayout.FLAG_USE_SWIPEBACK;
             }
 
@@ -32840,8 +32846,27 @@ public class ChatActivity extends BaseFragment implements
                         if (selectedObject == null || i >= options.size()) {
                             return;
                         }
+                        if (options.get(i) == OPTION_REPEAT) {
+                            return;
+                        }
                         processSelectedOption(options.get(i));
                     });
+                    if (option == OPTION_REPEAT) {
+                        cell.setOnClickListener(v1 -> RepeatMessageMenu.open(popupLayout, cell, this, themeDelegate, scrimBlur3Factory, builder -> {
+                            builder.addBack(true, false);
+                            builder.addGap();
+                            ActionBarMenuSubItem v3 = builder.addItem(LocaleController.getString(R.string.Forward), R.drawable.msg_forward, v2 -> {
+                                builder.closeForeground();
+                                closeMenu();
+                            }, false, false);
+                            builder.addItem(LocaleController.getString(R.string.Copy), R.drawable.msg_copy, v2 -> {
+                                builder.closeForeground();
+                                closeMenu();
+                            }, false, true);
+                            return v3;
+                        }));
+                        cell.setOnLongClickListener(v1 -> true);
+                    }
                     if (option == OPTION_TRANSLATE) {
                         final boolean translateEnabled = getMessagesController().getTranslateController().isContextTranslateEnabled();
                         String toLangDefault = LocaleController.getInstance().getCurrentLocale().getLanguage();
@@ -33387,6 +33412,9 @@ public class ChatActivity extends BaseFragment implements
             } else {
                 popupY = inBubbleMode ? 0 : AndroidUtilities.statusBarHeight;
             }
+            if (RepeatMessageMenu.needsSwipeBack(options) && !inBubbleMode && !AndroidUtilities.isTablet()) {
+                popupY = SwipeBackSubmenu.reserveRoomAbove(scrimPopupContainerLayout, popupY);
+            }
             final int finalPopupX = scrimPopupX = popupX;
             final int finalPopupY = scrimPopupY = popupY;
             scrimPopupContainerLayout.setMaxHeight(maxY + height - popupY);
@@ -33683,7 +33711,7 @@ public class ChatActivity extends BaseFragment implements
 
     private ValueAnimator scrimViewAlphaAnimator;
 
-    private void closeMenu(boolean hideDim) {
+    void closeMenu(boolean hideDim) {
         scrimPopupWindowHideDimOnDismiss = hideDim;
         if (scrimPopupWindow != null) {
             scrimPopupWindow.dismiss();
@@ -46705,6 +46733,11 @@ public class ChatActivity extends BaseFragment implements
                     items.add(LocaleController.getString(R.string.ViewInTopic));
                     options.add(OPTION_VIEW_IN_TOPIC);
                     icons.add(R.drawable.msg_viewintopic);
+                }
+                if (canRepeat()) {
+                    items.add(LocaleController.getString(R.string.Repeat));
+                    options.add(OPTION_REPEAT);
+                    icons.add(R.drawable.msg_repeat);
                 }
                 if (type == 2) {
                     if (chatMode != MODE_SCHEDULED) {
