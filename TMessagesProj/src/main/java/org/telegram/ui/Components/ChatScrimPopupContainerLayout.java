@@ -126,7 +126,8 @@ public class ChatScrimPopupContainerLayout extends LinearLayout {
     }
 
     private void updatePopupTranslation() {
-        float x = (1f - progressToSwipeBack) * popupLayoutLeftOffset;
+        boolean pin = popupWindowLayout != null && popupWindowLayout.getSwipeBack() != null && popupWindowLayout.getSwipeBack().isCurrentForegroundPinningScrim();
+        float x = (1f - (pin ? 0f : progressToSwipeBack)) * popupLayoutLeftOffset;
         popupWindowLayout.setTranslationX(x);
         if (bottomView != null) {
             bottomView.setTranslationX(x);
