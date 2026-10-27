@@ -17,6 +17,7 @@ public class ChatScrimPopupContainerLayout extends LinearLayout {
     private ActionBarPopupWindow.ActionBarPopupWindowLayout popupWindowLayout;
     private View bottomView;
     private int maxHeight;
+    private int availableHeight;
     private float popupLayoutLeftOffset;
     private float progressToSwipeBack;
     private float bottomViewYOffset;
@@ -126,7 +127,8 @@ public class ChatScrimPopupContainerLayout extends LinearLayout {
     }
 
     private void updatePopupTranslation() {
-        float x = (1f - progressToSwipeBack) * popupLayoutLeftOffset;
+        boolean pin = popupWindowLayout != null && popupWindowLayout.getSwipeBack() != null && popupWindowLayout.getSwipeBack().isCurrentForegroundPinningScrim();
+        float x = (1f - (pin ? 0f : progressToSwipeBack)) * popupLayoutLeftOffset;
         popupWindowLayout.setTranslationX(x);
         if (bottomView != null) {
             bottomView.setTranslationX(x);
@@ -153,7 +155,14 @@ public class ChatScrimPopupContainerLayout extends LinearLayout {
             }
         });
         if (popupWindowLayout.getSwipeBack() != null) {
-            popupWindowLayout.getSwipeBack().addOnSwipeBackProgressListener((layout, toProgress, progress) -> {
+            PopupSwipeBackLayout swipeBack = popupWindowLayout.getSwipeBack();
+            swipeBack.setOnVisibleBottomUpdateListener(offset -> {
+                if (isReactionsBelow() && reactionsLayout.getParent() == this && popupWindowLayout.getLayoutParams() instanceof MarginLayoutParams) {
+                    offset -= ((MarginLayoutParams) popupWindowLayout.getLayoutParams()).bottomMargin;
+                    reactionsLayout.setTranslationY(offset);
+                }
+            });
+            swipeBack.addOnSwipeBackProgressListener((layout, toProgress, progress) -> {
                 if (bottomView != null) {
                     bottomView.setAlpha(1f - progress);
                 }
@@ -170,7 +179,27 @@ public class ChatScrimPopupContainerLayout extends LinearLayout {
     }
 
     public void setMaxHeight(int maxHeight) {
+        this.maxHeight = availableHeight = maxHeight;
+    }
+
+    int getAvailableHeight() {
+        return availableHeight;
+    }
+
+    void setCurrentMaxHeight(int maxHeight) {
         this.maxHeight = maxHeight;
+    }
+
+    ReactionsContainerLayout getReactionsLayout() {
+        return reactionsLayout;
+    }
+
+    View getBottomView() {
+        return bottomView;
+    }
+
+    boolean isReactionsBelow() {
+        return reactionsLayout != null && reactionsLayout.isTop;
     }
 
     public void setExpandSize(float expandSize) {

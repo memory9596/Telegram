@@ -162,7 +162,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
     public boolean hitLimit;
     private int currentAccount;
     private long waitingLoadingChatId;
-    private boolean isTop;
+    boolean isTop;
 
     private boolean mirrorX;
     private boolean isFlippedVertically;

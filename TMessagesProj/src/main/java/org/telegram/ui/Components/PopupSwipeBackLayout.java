@@ -35,6 +35,9 @@ public class PopupSwipeBackLayout extends FrameLayout {
     private final static int DURATION = 300;
 
     SparseIntArray overrideHeightIndex = new SparseIntArray();
+    private final SparseIntArray foregroundOffsetIndex = new SparseIntArray();
+    private int foregroundOffsetY = 0;
+    public int pinnedScrimForegroundIndex = -1;
     public float transitionProgress;
     private float toProgress = -1;
     private GestureDetectorCompat detector;
@@ -60,6 +63,8 @@ public class PopupSwipeBackLayout extends FrameLayout {
 
     private int lastHeightReported = -1;
     private IntCallback onHeightUpdateListener;
+    private FloatCallback onVisibleBottomUpdateListener;
+    private Runnable onForegroundClosedListener;
 
     private Rect hitRect = new Rect();
 
@@ -178,8 +183,16 @@ public class PopupSwipeBackLayout extends FrameLayout {
         float bSc = 0.95f + (1f - transitionProgress) * 0.05f;
         backgroundView.setScaleX(bSc);
         backgroundView.setScaleY(bSc);
+        float curOffsetY = foregroundOffsetY * transitionProgress;
+        float backTopY = ((MarginLayoutParams) backgroundView.getLayoutParams()).topMargin * (1f - transitionProgress);
+        if (getParent() instanceof ActionBarPopupWindow.ActionBarPopupWindowLayout) {
+            ActionBarPopupWindow.ActionBarPopupWindowLayout p = (ActionBarPopupWindow.ActionBarPopupWindowLayout) getParent();
+            p.backOffsetY = curOffsetY + backTopY;
+            p.invalidate();
+        }
         if (foregroundView != null) {
             foregroundView.setTranslationX((1f - transitionProgress) * getWidth());
+            foregroundView.setTranslationY(curOffsetY + backTopY);
         }
         invalidateVisibility();
 
@@ -241,7 +254,10 @@ public class PopupSwipeBackLayout extends FrameLayout {
         View bv = getChildAt(0);
         View fv = getChildAt(currentForegroundIndex);
 
-        boolean b = (transitionProgress > 0.5f ? fv : bv).dispatchTouchEvent(ev);
+        View target = (transitionProgress > 0.5f ? fv : bv);
+        ev.offsetLocation(-target.getX(), -target.getY());
+        boolean b = target.dispatchTouchEvent(ev);
+        ev.offsetLocation(target.getX(), target.getY());
         if (!b && act == MotionEvent.ACTION_DOWN) {
             return true;
         }
@@ -311,6 +327,7 @@ public class PopupSwipeBackLayout extends FrameLayout {
                 transitionProgress = f;
                 if (f <= 0) {
                     currentForegroundIndex = -1;
+                    runForegroundClosedListener();
                 }
                 invalidateTransforms();
                 isAnimationInProgress = false;
@@ -326,6 +343,18 @@ public class PopupSwipeBackLayout extends FrameLayout {
     private Runnable onForegroundOpen;
     public void setOnForegroundOpenFinished(Runnable listener) {
         onForegroundOpen = listener;
+    }
+
+    private void runForegroundClosedListener() {
+        if (onForegroundClosedListener != null) {
+            Runnable listener = onForegroundClosedListener;
+            onForegroundClosedListener = null;
+            listener.run();
+        }
+    }
+
+    public void setOnForegroundClosedListener(Runnable listener) {
+        onForegroundClosedListener = listener;
     }
 
     /**
@@ -345,6 +374,7 @@ public class PopupSwipeBackLayout extends FrameLayout {
         }
         currentForegroundIndex = viewIndex;
         overrideForegroundHeight = overrideHeightIndex.get(viewIndex);
+        foregroundOffsetY = foregroundOffsetIndex.get(viewIndex);
         animateToState(1, 0);
     }
 
@@ -359,6 +389,7 @@ public class PopupSwipeBackLayout extends FrameLayout {
         if (!animated) {
             currentForegroundIndex = -1;
             transitionProgress = 0;
+            runForegroundClosedListener();
             invalidateTransforms();
             return;
         } else {
@@ -383,10 +414,11 @@ public class PopupSwipeBackLayout extends FrameLayout {
                     ch.layout(0, bottom - top - ch.getMeasuredHeight(), ch.getMeasuredWidth(), bottom - top);
                 }
             } else {
+                int childTop = ((MarginLayoutParams) ch.getLayoutParams()).topMargin;
                 if (stickToRight) {
-                    ch.layout((right - left) - ch.getMeasuredWidth(), 0, right - left, ch.getMeasuredHeight());
+                    ch.layout((right - left) - ch.getMeasuredWidth(), childTop, right - left, childTop + ch.getMeasuredHeight());
                 } else {
-                    ch.layout(0, 0, ch.getMeasuredWidth(), ch.getMeasuredHeight());
+                    ch.layout(0, childTop, ch.getMeasuredWidth(), childTop + ch.getMeasuredHeight());
                 }
             }
         }
@@ -412,15 +444,16 @@ public class PopupSwipeBackLayout extends FrameLayout {
             h = fH;
         } else {
             View foregroundView = getChildAt(currentForegroundIndex);
-            float tY = foregroundView.getTop();
             float tW = foregroundView.getMeasuredWidth();
             float tH = overrideForegroundHeight != 0 ? overrideForegroundHeight : foregroundView.getMeasuredHeight();
+            boolean foregroundAtBottom = foregroundView.getLayoutParams() instanceof FrameLayout.LayoutParams && ((LayoutParams) foregroundView.getLayoutParams()).gravity == Gravity.BOTTOM;
+            float tY = foregroundAtBottom ? foregroundView.getBottom() - tH : foregroundView.getTop();
             if (backgroundView.getMeasuredWidth() == 0 || backgroundView.getMeasuredHeight() == 0 || foregroundView.getMeasuredWidth() == 0 || foregroundView.getMeasuredHeight() == 0) {
                 y = fY;
                 w = fW;
                 h = fH;
             } else {
-                y = AndroidUtilities.lerp(fY, tY, transitionProgress);
+                y = AndroidUtilities.lerp(fY, tY, transitionProgress) + foregroundOffsetY * transitionProgress;
                 w = AndroidUtilities.lerp(fW, tW, transitionProgress);
                 h = AndroidUtilities.lerp(fH, tH, transitionProgress);
             }
@@ -442,14 +475,25 @@ public class PopupSwipeBackLayout extends FrameLayout {
         if (onHeightUpdateListener != null && lastHeightReported != mRect.height()) {
             onHeightUpdateListener.run(lastHeightReported = (int) mRect.height());
         }
+        if (onVisibleBottomUpdateListener != null) {
+            onVisibleBottomUpdateListener.run(mRect.bottom - getMeasuredHeight());
+        }
     }
 
     public interface IntCallback {
         public void run(int height);
     }
 
+    public interface FloatCallback {
+        void run(float value);
+    }
+
     public void setOnHeightUpdateListener(IntCallback onHeightUpdateListener) {
         this.onHeightUpdateListener = onHeightUpdateListener;
+    }
+
+    public void setOnVisibleBottomUpdateListener(FloatCallback listener) {
+        onVisibleBottomUpdateListener = listener;
     }
 
     /**
@@ -539,5 +583,17 @@ public class PopupSwipeBackLayout extends FrameLayout {
 
     public interface OnSwipeBackProgressListener {
         void onSwipeBackProgress(PopupSwipeBackLayout layout, float toProgress, float progress);
+    }
+
+    public boolean isCurrentForegroundPinningScrim() {
+        return currentForegroundIndex >= 0 && currentForegroundIndex == pinnedScrimForegroundIndex;
+    }
+
+    public void setForegroundOffsetY(int viewIndex, int offsetY) {
+        foregroundOffsetIndex.put(viewIndex, offsetY);
+        if (viewIndex == currentForegroundIndex) {
+            foregroundOffsetY = offsetY;
+            invalidateTransforms();
+        }
     }
 }
