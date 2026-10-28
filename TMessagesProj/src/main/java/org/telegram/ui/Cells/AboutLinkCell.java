@@ -657,13 +657,13 @@ public class AboutLinkCell extends FrameLayout {
         return height;
     }
     private void setHeight(int height) {
-        RecyclerView.LayoutParams lp = (RecyclerView.LayoutParams) getLayoutParams();
+        ViewGroup.LayoutParams lp = getLayoutParams();
         int wasHeight;
         boolean newHeight;
         if (lp == null) {
             newHeight = true;
             wasHeight = (getMinimumHeight() == 0 ? getHeight() : getMinimumHeight());
-            lp = new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height);
+            lp = new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height);
         } else {
             wasHeight = lp.height;
             newHeight = wasHeight != height;

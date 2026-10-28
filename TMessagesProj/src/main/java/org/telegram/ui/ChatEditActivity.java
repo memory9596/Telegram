@@ -74,6 +74,7 @@ import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ActionBar.ThemeDescription;
+import org.telegram.ui.Cells.AboutLinkCell;
 import org.telegram.ui.Cells.HeaderCell;
 import org.telegram.ui.Cells.RadioButtonCell;
 import org.telegram.ui.Cells.ShadowSectionCell;
@@ -139,6 +140,7 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
 
     private LinearLayout settingsContainer;
     private EditTextBoldCursor descriptionTextView;
+    private AboutLinkCell descriptionTextViewReadOnly;
 
     private LinearLayout typeEditContainer;
     private ShadowSectionCell settingsTopSectionCell;
@@ -808,52 +810,61 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
             settingsContainer.addView(setAvatarCell, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
         }
 
-        descriptionTextView = new EditTextBoldCursor(context);
-        descriptionTextView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
-        descriptionTextView.setHintTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteHintText));
-        descriptionTextView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-        descriptionTextView.setPadding(0, 0, 0, dp(6));
-        descriptionTextView.setBackgroundDrawable(null);
-        descriptionTextView.setGravity(LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT);
-        descriptionTextView.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_AUTO_CORRECT);
-        descriptionTextView.setImeOptions(EditorInfo.IME_ACTION_DONE);
-        descriptionTextView.setEnabled(currentUser != null || ChatObject.canChangeChatInfo(currentChat));
-        descriptionTextView.setFocusable(descriptionTextView.isEnabled());
-        inputFilters = new InputFilter[1];
-        inputFilters[0] = new InputFilter.LengthFilter(255);
-        descriptionTextView.setFilters(inputFilters);
-        descriptionTextView.setHint(getString("DescriptionOptionalPlaceholder", R.string.DescriptionOptionalPlaceholder));
-        descriptionTextView.setCursorColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-        descriptionTextView.setCursorSize(dp(20));
-        descriptionTextView.setCursorWidth(1.5f);
-        if (descriptionTextView.isEnabled()) {
+        final boolean canEditDescription = currentUser != null || ChatObject.canChangeChatInfo(currentChat);
+        if (canEditDescription) {
+            descriptionTextView = new EditTextBoldCursor(context);
+            descriptionTextView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
+            descriptionTextView.setHintTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteHintText));
+            descriptionTextView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+            descriptionTextView.setPadding(0, 0, 0, dp(6));
+            descriptionTextView.setBackgroundDrawable(null);
+            descriptionTextView.setGravity(LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT);
+            descriptionTextView.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_AUTO_CORRECT);
+            descriptionTextView.setImeOptions(EditorInfo.IME_ACTION_DONE);
+            descriptionTextView.setFilters(new InputFilter[]{ new InputFilter.LengthFilter(255) });
+            descriptionTextView.setHint(getString("DescriptionOptionalPlaceholder", R.string.DescriptionOptionalPlaceholder));
+            descriptionTextView.setCursorColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+            descriptionTextView.setCursorSize(dp(20));
+            descriptionTextView.setCursorWidth(1.5f);
             settingsContainer.addView(descriptionTextView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 23, 15, 23, 9));
+            descriptionTextView.setOnEditorActionListener((textView, i, keyEvent) -> {
+                if (i == EditorInfo.IME_ACTION_DONE && doneButton != null) {
+                    doneButton.performClick();
+                    return true;
+                }
+                return false;
+            });
+            descriptionTextView.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+
+                }
+
+                @Override
+                public void onTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+
+                }
+
+                @Override
+                public void afterTextChanged(Editable editable) {
+
+                }
+            });
         } else {
-            settingsContainer.addView(descriptionTextView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 23, 12, 23, 6));
+            descriptionTextViewReadOnly = new AboutLinkCell(context, this, resourceProvider) {
+                @Override
+                protected void didPressUrl(String url, Browser.Progress progress) {
+                    if (url.startsWith("@")) {
+                        getMessagesController().openByUserName(url.substring(1), ChatEditActivity.this, 0);
+                    } else {
+                        Browser.openUrl(getContext(), url);
+                    }
+                }
+            };
+            descriptionTextViewReadOnly.setMoreButtonDisabled(true);
+            settingsContainer.addView(descriptionTextViewReadOnly,
+            LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 5, 7, 5, 1));
         }
-        descriptionTextView.setOnEditorActionListener((textView, i, keyEvent) -> {
-            if (i == EditorInfo.IME_ACTION_DONE && doneButton != null) {
-                doneButton.performClick();
-                return true;
-            }
-            return false;
-        });
-        descriptionTextView.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence charSequence, int i, int i2, int i3) {
-
-            }
-
-            @Override
-            public void onTextChanged(CharSequence charSequence, int i, int i2, int i3) {
-
-            }
-
-            @Override
-            public void afterTextChanged(Editable editable) {
-
-            }
-        });
 
         settingsTopSectionCell = new ShadowSectionCell(context);
         linearLayout1.addView(settingsTopSectionCell, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
@@ -1604,14 +1615,28 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
         nameTextView.setText(Emoji.replaceEmoji(currentUser != null ? ContactsController.formatName(currentUser) : currentChat.title, nameTextView.getEditText().getPaint().getFontMetricsInt(), true));
         nameTextView.setSelection(nameTextView.length());
         if (info != null) {
-            descriptionTextView.setText(info.about);
+            setDescriptionText(info.about);
         } else if (userInfo != null) {
-            descriptionTextView.setText(userInfo.about);
+            setDescriptionText(userInfo.about);
         }
         setAvatar();
         updateFields(true, false);
 
         return fragmentView;
+    }
+
+    private void setDescriptionText(String text) {
+        if (descriptionTextView != null) {
+            descriptionTextView.setText(text == null ? "" : text);
+            return;
+        }
+        if (descriptionTextViewReadOnly == null) return;
+
+        final boolean empty = TextUtils.isEmpty(text);
+        descriptionTextViewReadOnly.setVisibility(empty ? View.GONE : View.VISIBLE);
+        if (!empty) {
+            descriptionTextViewReadOnly.setTextAndValue(text, "", true);
+        }
     }
 
     public static CharSequence applyNewSpan(String str) {
@@ -1793,8 +1818,8 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
         if (id == NotificationCenter.chatInfoDidLoad) {
             TLRPC.ChatFull chatFull = (TLRPC.ChatFull) args[0];
             if (chatFull.id == chatId) {
-                if (info == null && descriptionTextView != null) {
-                    descriptionTextView.setText(chatFull.about);
+                if (info == null) {
+                    setDescriptionText(chatFull.about);
                 }
                 boolean infoWasEmpty = info == null;
                 info = chatFull;
@@ -2655,7 +2680,6 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
 
         themeDescriptions.add(new ThemeDescription(fragmentView, ThemeDescription.FLAG_BACKGROUND, null, null, null, null, Theme.key_windowBackgroundGray));
 
-//        themeDescriptions.add(new ThemeDescription(actionBar, ThemeDescription.FLAG_BACKGROUND, null, null, null, null, Theme.key_actionBarDefault));
         themeDescriptions.add(new ThemeDescription(actionBar, ThemeDescription.FLAG_AB_ITEMSCOLOR, null, null, null, null, Theme.key_actionBarDefaultIcon));
         themeDescriptions.add(new ThemeDescription(actionBar, ThemeDescription.FLAG_AB_TITLECOLOR, null, null, null, null, Theme.key_actionBarDefaultTitle));
         themeDescriptions.add(new ThemeDescription(actionBar, ThemeDescription.FLAG_AB_SELECTORCOLOR, null, null, null, null, Theme.key_actionBarDefaultSelector));
@@ -2699,8 +2723,14 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
         themeDescriptions.add(new ThemeDescription(nameTextView, ThemeDescription.FLAG_HINTTEXTCOLOR, null, null, null, null, Theme.key_windowBackgroundWhiteHintText));
         themeDescriptions.add(new ThemeDescription(nameTextView, ThemeDescription.FLAG_BACKGROUNDFILTER, null, null, null, null, Theme.key_windowBackgroundWhiteInputField));
         themeDescriptions.add(new ThemeDescription(nameTextView, ThemeDescription.FLAG_BACKGROUNDFILTER | ThemeDescription.FLAG_DRAWABLESELECTEDSTATE, null, null, null, null, Theme.key_windowBackgroundWhiteInputFieldActivated));
-        themeDescriptions.add(new ThemeDescription(descriptionTextView, ThemeDescription.FLAG_TEXTCOLOR, null, null, null, null, Theme.key_windowBackgroundWhiteBlackText));
-        themeDescriptions.add(new ThemeDescription(descriptionTextView, ThemeDescription.FLAG_HINTTEXTCOLOR, null, null, null, null, Theme.key_windowBackgroundWhiteHintText));
+        if (descriptionTextView != null) {
+            themeDescriptions.add(new ThemeDescription(descriptionTextView, ThemeDescription.FLAG_TEXTCOLOR, null, null, null, null, Theme.key_windowBackgroundWhiteBlackText));
+            themeDescriptions.add(new ThemeDescription(descriptionTextView, ThemeDescription.FLAG_HINTTEXTCOLOR, null, null, null, null, Theme.key_windowBackgroundWhiteHintText));
+        }
+        if (descriptionTextViewReadOnly != null) {
+            themeDescriptions.add(new ThemeDescription(descriptionTextViewReadOnly, ThemeDescription.FLAG_TEXTCOLOR, null, null, null, null, Theme.key_windowBackgroundWhiteBlackText));
+            themeDescriptions.add(new ThemeDescription(descriptionTextViewReadOnly, ThemeDescription.FLAG_LINKCOLOR, null, null, null, null, Theme.key_chat_messageLinkIn));
+        }
 
         themeDescriptions.add(new ThemeDescription(avatarContainer, ThemeDescription.FLAG_BACKGROUND, null, null, null, null, Theme.key_windowBackgroundWhite));
         themeDescriptions.add(new ThemeDescription(settingsContainer, ThemeDescription.FLAG_BACKGROUND, null, null, null, null, Theme.key_windowBackgroundWhite));
@@ -2712,11 +2742,6 @@ public class ChatEditActivity extends BaseFragment implements ImageUpdater.Image
         themeDescriptions.add(new ThemeDescription(settingsTopSectionCell, ThemeDescription.FLAG_BACKGROUNDFILTER, new Class[]{ShadowSectionCell.class}, null, null, null, Theme.key_windowBackgroundGrayShadow));
         themeDescriptions.add(new ThemeDescription(settingsSectionCell, ThemeDescription.FLAG_BACKGROUNDFILTER, new Class[]{ShadowSectionCell.class}, null, null, null, Theme.key_windowBackgroundGrayShadow));
         themeDescriptions.add(new ThemeDescription(deleteInfoCell, ThemeDescription.FLAG_BACKGROUNDFILTER, new Class[]{ShadowSectionCell.class}, null, null, null, Theme.key_windowBackgroundGrayShadow));
-
-//        themeDescriptions.add(new ThemeDescription(signCell, ThemeDescription.FLAG_SELECTOR, null, null, null, null, Theme.key_listSelector));
-//        themeDescriptions.add(new ThemeDescription(signCell, 0, new Class[]{TextCheckCell.class}, new String[]{"textView"}, null, null, null, Theme.key_windowBackgroundWhiteBlackText));
-//        themeDescriptions.add(new ThemeDescription(signCell, 0, new Class[]{TextCheckCell.class}, new String[]{"checkBox"}, null, null, null, Theme.key_switchTrack));
-//        themeDescriptions.add(new ThemeDescription(signCell, 0, new Class[]{TextCheckCell.class}, new String[]{"checkBox"}, null, null, null, Theme.key_switchTrackChecked));
 
         themeDescriptions.add(new ThemeDescription(deleteCell, ThemeDescription.FLAG_SELECTOR, null, null, null, null, Theme.key_listSelector));
         themeDescriptions.add(new ThemeDescription(deleteCell, ThemeDescription.FLAG_TEXTCOLOR, new Class[]{TextSettingsCell.class}, new String[]{"textView"}, null, null, null, Theme.key_text_RedRegular));
