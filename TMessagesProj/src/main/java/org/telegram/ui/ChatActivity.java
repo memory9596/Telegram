@@ -357,6 +357,7 @@ import java.io.FileWriter;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URLDecoder;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -992,6 +993,7 @@ public class ChatActivity extends BaseFragment implements
     private boolean needSelectFromMessageId;
     private int returnToMessageId;
     private int returnToLoadIndex;
+    private final ArrayDeque<int[]> replyStack = new ArrayDeque<>();
     private int createUnreadMessageAfterId;
     private boolean createUnreadMessageAfterIdLoading;
     private boolean loadingFromOldPosition;
@@ -11178,6 +11180,11 @@ public class ChatActivity extends BaseFragment implements
         final Runnable inCaseLoading = () -> {
             sideControlsButtonsLayout.setButtonLoading(ChatActivitySideControlsButtonsLayout.BUTTON_PAGE_DOWN, true, true);
         };
+        if (!replyStack.isEmpty()) {
+            int[] top = replyStack.pop();
+            scrollToMessageId(top[0], 0, true, top[1], true, 0, null, inCaseLoading);
+            return;
+        }
         if (createUnreadMessageAfterId != 0) {
             scrollToMessageId(createUnreadMessageAfterId, 0, false, returnToLoadIndex, true, 0, null, inCaseLoading);
         } else if (returnToMessageId > 0) {
@@ -17779,6 +17786,9 @@ public class ChatActivity extends BaseFragment implements
                 showFloatingTopicView(false);
             }
         }
+        if (fromMessageId != 0 && (replyStack.isEmpty() || replyStack.peek()[0] != fromMessageId)) {
+            replyStack.push(new int[]{fromMessageId, loadIndex});
+        }
         returnToMessageId = fromMessageId;
         returnToLoadIndex = loadIndex;
         needSelectFromMessageId = select;
@@ -17816,6 +17826,7 @@ public class ChatActivity extends BaseFragment implements
         } else {
             returnToMessageId = 0;
             newUnreadMessageCount = 0;
+            replyStack.clear();
         }
 
         sideControlsButtonsLayout.showButton(ChatActivitySideControlsButtonsLayout.BUTTON_PAGE_DOWN, show, animated);
@@ -47678,6 +47689,7 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private void goToNextOrPrevSearchMessage(boolean searchUp) {
+        replyStack.clear();
         if (chatMode == MODE_SEARCH) {
             HashtagSearchController.getInstance(currentAccount).jumpToMessage(classGuid, hashtagSearchSelectedIndex + (searchUp ? 1 : -1), searchType);
         } else {
@@ -47738,6 +47750,12 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private boolean onSideControlButtonOnLongClick(int buttonId, View view) {
+        if (buttonId == ChatActivitySideControlsButtonsLayout.BUTTON_PAGE_DOWN) {
+            replyStack.clear();
+            returnToMessageId = 0;
+            scrollToLastMessage(true, true, null);
+            return true;
+        }
         final Runnable onRead;
         final int type;
         if (buttonId == ChatActivitySideControlsButtonsLayout.BUTTON_MENTION) {
