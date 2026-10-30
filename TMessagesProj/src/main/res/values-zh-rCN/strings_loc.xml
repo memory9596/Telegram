@@ -5,4 +5,5 @@
     <string name="UserRestrictionsSendGames">游戏</string>
     <string name="UserRestrictionsSendInline">机器人内容</string>
     <string name="Repeat">复读</string>
+    <string name="QuickShare">快速转发</string>
 </resources>

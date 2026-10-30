@@ -5,4 +5,5 @@
     <string name="UserRestrictionsSendGames">Send Games</string>
     <string name="UserRestrictionsSendInline">Send Inline Content</string>
     <string name="Repeat">Repeat</string>
+    <string name="QuickShare">Quick Share</string>
 </resources>
