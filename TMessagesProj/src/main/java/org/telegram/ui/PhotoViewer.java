@@ -5213,14 +5213,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     if (currentMessageObject == null || !(parentActivity instanceof LaunchActivity)) {
                         return;
                     }
-                    boolean isChannel = false;
-                    if (!currentMessageObject.scheduled) {
-                        long dialogId = currentMessageObject.getDialogId();
-                        if (DialogObject.isChatDialog(dialogId)) {
-                            TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(-dialogId);
-                            isChannel = ChatObject.isChannelAndNotMegaGroup(chat);
-                        }
-                    }
                     ((LaunchActivity) parentActivity).switchToAccount(currentMessageObject.currentAccount, true);
                     ArrayList<MessageObject> msgs = new ArrayList<>(1);
                     MessageObject.GroupedMessages group = parentChatActivity != null ? parentChatActivity.getGroup(currentMessageObject.getGroupId()) : null;
@@ -5230,9 +5222,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                         msgs.add(currentMessageObject);
                     }
 
-                    if (isChannel && msgs.size() <= 1) {
+                    if (msgs.size() <= 1) {
                         showShareAlert(msgs);
-                    } else if (msgs.size() > 1) {
+                    } else {
                         boolean photos = true;
                         for (int i = 0; i < msgs.size(); ++i) {
                             if (!msgs.get(i).isPhoto() || msgs.get(i).isVideo()) {
@@ -5267,61 +5259,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                             }
                         }
                         dialog.setTextColor(getThemedColor(Theme.key_voipgroup_actionBarItems));
-                    } else {
-                        Bundle args = new Bundle();
-                        args.putBoolean("onlySelect", true);
-                        args.putBoolean("canSelectTopics", true);
-                        args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_FORWARD);
-                        DialogsActivity fragment = new DialogsActivity(args);
-                        final ArrayList<MessageObject> fmessages = new ArrayList<>();
-                        fmessages.add(currentMessageObject);
-                        final ChatActivity parentChatActivityFinal = parentChatActivity;
-                        fragment.setDelegate((fragment1, dids, message, param, notify, scheduleDate, scheduleRepeatPeriod, topicsFragment) -> {
-                            if (dids.size() > 1 || dids.get(0).dialogId == UserConfig.getInstance(currentAccount).getClientUserId() || message != null) {
-                                for (int a = 0; a < dids.size(); a++) {
-                                    long did = dids.get(a).dialogId;
-                                    if (message != null) {
-                                        SendMessagesHelper.getInstance(currentAccount).sendMessage(SendMessagesHelper.SendMessageParams.of(message.toString(), did, null, null, null, true, null, null, null, true, 0, 0, null, false));
-                                    }
-                                    SendMessagesHelper.getInstance(currentAccount).sendMessage(fmessages, did, false, false, true, 0, 0);
-                                }
-                                fragment1.finishFragment();
-                                if (parentChatActivityFinal != null) {
-                                    UndoView undoView = parentChatActivityFinal.getUndoView();
-                                    if (undoView != null) {
-                                        if (dids.size() == 1) {
-                                            undoView.showWithAction(dids.get(0).dialogId, UndoView.ACTION_FWD_MESSAGES, fmessages.size());
-                                        } else {
-                                            undoView.showWithAction(0, UndoView.ACTION_FWD_MESSAGES, fmessages.size(), dids.size(), null, null);
-                                        }
-                                    }
-                                }
-                            } else {
-                                MessagesStorage.TopicKey topicKey = dids.get(0);
-                                long did = topicKey.dialogId;
-                                Bundle args1 = new Bundle();
-                                args1.putBoolean("scrollToTopOnResume", true);
-                                if (DialogObject.isEncryptedDialog(did)) {
-                                    args1.putInt("enc_id", DialogObject.getEncryptedChatId(did));
-                                } else if (DialogObject.isUserDialog(did)) {
-                                    args1.putLong("user_id", did);
-                                } else {
-                                    args1.putLong("chat_id", -did);
-                                }
-                                ChatActivity chatActivity = new ChatActivity(args1);
-                                if (topicKey.topicId != 0) {
-                                    ForumUtilities.applyTopic(chatActivity, topicKey);
-                                }
-                                if (((LaunchActivity) parentActivity).presentFragment(chatActivity, true, false)) {
-                                    chatActivity.showFieldPanelForForward(true, fmessages);
-                                } else {
-                                    fragment1.finishFragment();
-                                }
-                            }
-                            return true;
-                        });
-                        ((LaunchActivity) parentActivity).presentFragment(fragment, false, true);
-                        closePhoto(false, false);
                     }
                 } else if (id == gallery_menu_paint) {
                     openCurrentPhotoInPaintModeForSelect();
