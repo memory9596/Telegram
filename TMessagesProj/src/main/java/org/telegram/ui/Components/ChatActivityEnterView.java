@@ -47,6 +47,7 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.ColorDrawable;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -14935,6 +14936,20 @@ public class ChatActivityEnterView extends FrameLayout implements
         private boolean isNewDesignSendButton;
 
         public SendButton(Context context, int resId, Theme.ResourcesProvider resourcesProvider, boolean isNewDesignSendButton) {
+            this(context,
+                resId != 0 ? context.getResources().getDrawable(resId) : null,
+                resourcesProvider, isNewDesignSendButton, resId);
+        }
+
+        public SendButton(Context context, Drawable sourceDrawable, Theme.ResourcesProvider resourcesProvider) {
+            this(context, sourceDrawable, resourcesProvider, false);
+        }
+
+        public SendButton(Context context, Drawable sourceDrawable, Theme.ResourcesProvider resourcesProvider, boolean isNewDesignSendButton) {
+            this(context, sourceDrawable, resourcesProvider, isNewDesignSendButton, 0);
+        }
+
+        private SendButton(Context context, Drawable sourceDrawable, Theme.ResourcesProvider resourcesProvider, boolean isNewDesignSendButton, int resId) {
             super(context);
 
             this.resId = resId;
@@ -14949,9 +14964,8 @@ public class ChatActivityEnterView extends FrameLayout implements
             priceText.setCallback(this);
             priceText.setOverrideFullWidth(AndroidUtilities.displaySize.x);
 
-            drawable = context.getResources().getDrawable(resId).mutate();
-            inactiveDrawable = context.getResources().getDrawable(resId).mutate();
-            drawableInverse = context.getResources().getDrawable(resId).mutate();
+            applyDrawableSource(sourceDrawable);
+
             emojiDrawable = new AnimatedEmojiDrawable.SwapAnimatedEmojiDrawable(this, dp(14));
 
             loadingPaint.setStyle(Paint.Style.STROKE);
@@ -14975,13 +14989,30 @@ public class ChatActivityEnterView extends FrameLayout implements
             invalidate();
         }
 
+        private void applyDrawableSource(Drawable source) {
+            drawable        = cloneDrawable(source);
+            inactiveDrawable = cloneDrawable(source);
+            drawableInverse  = cloneDrawable(source);
+            drawableColor = 0;
+            invalidate();
+        }
+
+        private Drawable cloneDrawable(Drawable source) {
+            if (source == null) {
+                return new ColorDrawable(Color.TRANSPARENT);
+            }
+            Drawable.ConstantState cs = source.getConstantState();
+            Drawable copy = cs != null ? cs.newDrawable(getContext().getResources()) : null;
+            if (copy == null) {
+                return source.mutate();
+            }
+            return copy.mutate();
+        }
+
         public void setResourceId(int resId) {
             if (this.resId != resId) {
                 this.resId = resId;
-                drawable = getContext().getResources().getDrawable(resId).mutate();
-                inactiveDrawable = getContext().getResources().getDrawable(resId).mutate();
-                drawableInverse = getContext().getResources().getDrawable(resId).mutate();
-                invalidate();
+                applyDrawableSource(resId != 0 ? getContext().getResources().getDrawable(resId) : null);
             }
         }
 
