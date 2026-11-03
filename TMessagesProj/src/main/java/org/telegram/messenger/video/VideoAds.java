@@ -234,7 +234,7 @@ public static VideoAds make(
 
     private void schedule() {
         AndroidUtilities.cancelRunOnUIThread(showRunnable);
-        if (!loaded || ads.isEmpty()) return;
+        if (!showEnabled || !loaded || ads.isEmpty()) return;
         final int delay = first ? start_delay : between_delay;
         final long timePassed = System.currentTimeMillis() - lastTime;
         AndroidUtilities.runOnUIThread(showRunnable, Math.max(0, delay * 1000L - timePassed));
@@ -265,7 +265,7 @@ public static VideoAds make(
     private float currentMenuTranslationY;
 
     private void show() {
-        if (ads.isEmpty()) return;
+        if (!showEnabled || ads.isEmpty()) return;
         final TLRPC.TL_sponsoredMessage ad = ads.get(0);
         final long showTime = System.currentTimeMillis() - currentBulletinPassedTime;
         bulletinShowTime = showTime;
@@ -890,4 +890,9 @@ public static VideoAds make(
         }
     }
 
+    private boolean showEnabled = true;
+
+    public void setShowEnabled(boolean enabled) {
+        this.showEnabled = enabled;
+    }
 }
