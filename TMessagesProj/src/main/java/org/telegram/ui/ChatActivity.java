@@ -30379,7 +30379,7 @@ public class ChatActivity extends BaseFragment implements
             topPanelLayout.setViewVisible(restartTopicButton, showRestartTopic1, animated);
             topPanelLayout.setViewVisible(translateButton, showTranslate, animated);
             topPanelLayout.setViewVisible(bizBotButton, showBizBot, animated);
-            topPanelLayout.setViewVisible(botAdView, showBotAd, animated);
+            topPanelLayout.setViewVisible(botAdView, false, animated);
             topPanelLayout.setViewVisible(addProfilePictureButton, showAddProfilePicture, animated);
         }
 
@@ -38050,6 +38050,8 @@ public class ChatActivity extends BaseFragment implements
 
     private boolean hasSendingMessagesInBotForum;
 
+    private static final int VIEW_TYPE_SPONSORED = 11;
+
     public class ChatActivityAdapter extends RecyclerAnimationScrollHelper.AnimatableAdapter {
 
         private Context mContext;
@@ -38284,6 +38286,12 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            if (viewType == VIEW_TYPE_SPONSORED) {
+                View placeholder = new View(mContext);
+                placeholder.setLayoutParams(new RecyclerView.LayoutParams(RecyclerView.LayoutParams.MATCH_PARENT, 0));
+                placeholder.setVisibility(View.GONE);
+                return new RecyclerListView.Holder(placeholder);
+            }
             View view = null;
             if (viewType == 0) {
                 view = new ChatMessageCell(mContext, currentAccount, true, sharedResources, themeDelegate);
@@ -39307,7 +39315,11 @@ public class ChatActivity extends BaseFragment implements
                 } else {
                     messages = ChatActivity.this.messages;
                 }
-                return messages.get(position - messagesStartRow).contentType;
+                MessageObject message = messages.get(position - messagesStartRow);
+                if (message.isSponsored()) {
+                    return VIEW_TYPE_SPONSORED;
+                }
+                return message.contentType;
             } else if (position == botInfoRow) {
                 return 3;
             } else if (position == userInfoRow) {
