@@ -1,3 +1,19 @@
+> **Note: This is a personal fork, not an official upstream release.**
+>
+>  This fork is maintained for personal use. Most commits in this repository are patches cherry-picked from other forks, sometimes with conflict resolution or minor modifications. Some changes are also made with "vibe coding" and may not be thoroughly reviewed. This fork is not guaranteed to be stable or suitable for upstream. Use at your own risk.
+
+## Credits (listed in no particular order)
+
+- [Forkgram](https://github.com/forkgram/TelegramAndroid)
+- [Inugram](https://github.com/teidesu/inugram)
+- [Mercurygram](https://github.com/Mercurygram/Mercurygram)
+- [NagramXF](https://github.com/Keeperorowner/NagramXF)
+- [NagramX](https://github.com/risin42/NagramX)
+- [Nagram](https://github.com/NextAlone/Nagram)
+- [Telegram](https://github.com/DrKLO/Telegram)
+- [Telegram (satouriko's fork)](https://github.com/satouriko/Telegram)
+- [Telegram (xiaobaiweinuli's fork)](https://github.com/xiaobaiweinuli/Telegram)
+
 ## Telegram messenger for Android
 
 [Telegram](https://telegram.org) is a messaging app with a focus on speed and security. It’s superfast, simple and free.
