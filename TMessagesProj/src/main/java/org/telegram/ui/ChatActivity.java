@@ -6985,7 +6985,7 @@ public class ChatActivity extends BaseFragment implements
                 checkScrollForLoad(true);
                 if (firstVisibleItem != RecyclerView.NO_POSITION) {
                     int totalItemCount = chatAdapter.getItemCount();
-                    if (firstVisibleItem == 0 && forwardEndReached[0]) {
+                    if (firstVisibleItem <= chatAdapter.messagesStartRow + getSponsoredMessagesCount() && forwardEndReached[0]) {
                         if (dy >= 0) {
                             canShowPagedownButton = false;
                             updatePagedownButtonVisibility(true);
@@ -16497,7 +16497,8 @@ public class ChatActivity extends BaseFragment implements
         chatScrollHelper.setScrollDirection(RecyclerAnimationScrollHelper.SCROLL_DIRECTION_DOWN);
         if (forwardEndReached[0] && first_unread_id == 0 && startLoadFromMessageId == 0) {
             sideControlsButtonsLayout.setButtonLoading(ChatActivitySideControlsButtonsLayout.BUTTON_PAGE_DOWN, false, true);
-            if (chatLayoutManager.findFirstCompletelyVisibleItemPosition() == 0) {
+            int position = chatLayoutManager.findFirstCompletelyVisibleItemPosition();
+            if (position != RecyclerView.NO_POSITION && position <= chatAdapter.messagesStartRow + getSponsoredMessagesCount()) {
                 canShowPagedownButton = false;
                 updatePagedownButtonVisibility(true);
                 removeSelectedMessageHighlight();
@@ -16505,7 +16506,7 @@ public class ChatActivity extends BaseFragment implements
             } else {
                 chatAdapter.updateRowsSafe();
                 chatScrollHelperCallback.scrollTo = null;
-                int position = 0;
+                position = 0;
                 if (skipSponsored) {
                     while (position < messages.size()) {
                         if (!messages.get(position).isSponsored()) {
@@ -16815,6 +16816,12 @@ public class ChatActivity extends BaseFragment implements
                 }
                 continue;
             }
+            if (view.getTag() instanceof MessageObject && ((MessageObject) view.getTag()).isSponsored()) {
+                if (top <= height - chatListView.getPaddingBottom()) {
+                    markSponsoredAsRead((MessageObject) view.getTag());
+                }
+                continue;
+            }
             if (messageCell != null) {
                 messageCell.setVisibleOnScreen(true, clipTopFinal - top, bottom - clipBottomFinal);
                 if (checkPremiumFloodWait) {
@@ -16846,6 +16853,12 @@ public class ChatActivity extends BaseFragment implements
 
             if (messageCell != null) {
                 messageObject = messageCell.getMessageObject();
+                if (bottom <= height - chatListView.getPaddingBottom() && !messages.isEmpty() && messages.get(0).isSponsored()
+                        && adapterPosition == chatAdapter.messagesStartRow + getSponsoredMessagesCount()) {
+                    for (int i = 0; i < messages.size() && messages.get(i).isSponsored(); i++) {
+                        markSponsoredAsRead(messages.get(i));
+                    }
+                }
                 if (messageObject.getDialogId() == dialog_id && messageObject.getId() > maxVisibleId) {
                     maxVisibleId = messageObject.getId();
                     maxVisibleMessageObject = messageObject;
@@ -30379,7 +30392,7 @@ public class ChatActivity extends BaseFragment implements
             topPanelLayout.setViewVisible(restartTopicButton, showRestartTopic1, animated);
             topPanelLayout.setViewVisible(translateButton, showTranslate, animated);
             topPanelLayout.setViewVisible(bizBotButton, showBizBot, animated);
-            topPanelLayout.setViewVisible(botAdView, showBotAd, animated);
+            topPanelLayout.setViewVisible(botAdView, false, animated);
             topPanelLayout.setViewVisible(addProfilePictureButton, showAddProfilePicture, animated);
         }
 
@@ -38050,6 +38063,8 @@ public class ChatActivity extends BaseFragment implements
 
     private boolean hasSendingMessagesInBotForum;
 
+    private static final int VIEW_TYPE_SPONSORED = 11;
+
     public class ChatActivityAdapter extends RecyclerAnimationScrollHelper.AnimatableAdapter {
 
         private Context mContext;
@@ -38284,6 +38299,12 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            if (viewType == VIEW_TYPE_SPONSORED) {
+                View placeholder = new View(mContext);
+                placeholder.setLayoutParams(new RecyclerView.LayoutParams(RecyclerView.LayoutParams.MATCH_PARENT, 0));
+                placeholder.setVisibility(View.GONE);
+                return new RecyclerListView.Holder(placeholder);
+            }
             View view = null;
             if (viewType == 0) {
                 view = new ChatMessageCell(mContext, currentAccount, true, sharedResources, themeDelegate);
@@ -38755,6 +38776,10 @@ public class ChatActivity extends BaseFragment implements
                 MessageObject message = messages.get(position - messagesStartRow);
                 View view = holder.itemView;
 
+                if (message.isSponsored()) {
+                    view.setTag(message);
+                    return;
+                }
                 if (view instanceof ChatMessageCell) {
                     final ChatMessageCell messageCell = (ChatMessageCell) view;
                     MessageObject.GroupedMessages groupedMessages = getValidGroupedMessage(message);
@@ -39307,7 +39332,11 @@ public class ChatActivity extends BaseFragment implements
                 } else {
                     messages = ChatActivity.this.messages;
                 }
-                return messages.get(position - messagesStartRow).contentType;
+                MessageObject message = messages.get(position - messagesStartRow);
+                if (message.isSponsored()) {
+                    return VIEW_TYPE_SPONSORED;
+                }
+                return message.contentType;
             } else if (position == botInfoRow) {
                 return 3;
             } else if (position == userInfoRow) {
