@@ -797,8 +797,8 @@ public class FileLoader extends BaseController {
         if (imageLocation == null) {
             return;
         }
-        String taskFileName = imageLocation.document != null ? getAttachFileName(imageLocation.document)
-                : imageLocation.location != null ? getAttachFileName(imageLocation.location, ext) : null;
+        String taskFileName = imageLocation.location != null ? getAttachFileName(imageLocation.location, ext)
+                : imageLocation.document != null ? getAttachFileName(imageLocation.document) : null;
         if (FileDownloadTasks.isBlocked(currentAccount, taskFileName)) return;
         if (cacheType == 0 && (imageLocation.isEncrypted() || imageLocation.photoSize != null && imageLocation.getSize() == 0)) {
             cacheType = 1;
@@ -889,7 +889,6 @@ public class FileLoader extends BaseController {
 
 
     private FileLoadOperation loadFileInternal(final TLRPC.Document document, final SecureDocument secureDocument, final WebFile webDocument, TLRPC.TL_fileLocationToBeDeprecated location, final ImageLocation imageLocation, Object parentObject, final String locationExt, final long locationSize, int priority, FileLoadOperationStream stream, final long streamOffset, boolean streamPriority, final int cacheType) {
-        if (FileDownloadTasks.isBlocked(currentAccount, document)) return null;
         String fileName;
         if (location != null) {
             fileName = getAttachFileName(location, locationExt);
@@ -909,6 +908,7 @@ public class FileLoader extends BaseController {
             FileLog.e(new RuntimeException("cant get hash from " + document));
             return null;
         }
+        if (FileDownloadTasks.isBlocked(currentAccount, fileName)) return null;
         if (cacheType != 10 && !TextUtils.isEmpty(fileName) && !fileName.contains("" + Integer.MIN_VALUE)) {
             loadOperationPathsUI.put(fileName, new LoadOperationUIObject());
         }
@@ -917,7 +917,6 @@ public class FileLoader extends BaseController {
             getDownloadController().startDownloadFile(document, (MessageObject) parentObject);
         }
 
-        if (FileDownloadTasks.isBlocked(currentAccount, fileName)) return null;
         final String finalFileName = fileName;
         FileLoadOperation operation = loadOperationPaths.get(finalFileName);
 

@@ -112,7 +112,6 @@ import org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble;
 import org.telegram.ui.Components.VideoPlayer;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.PhotoViewer;
-import org.telegram.ui.Stories.DarkThemeResourceProvider;
 import org.telegram.ui.Stories.recorder.StoryEntry;
 
 import java.io.File;
@@ -134,7 +133,6 @@ import java.util.Locale;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 
 public class MediaController implements AudioManager.OnAudioFocusChangeListener, NotificationCenter.NotificationCenterDelegate, SensorEventListener {
 
@@ -5539,455 +5537,16 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         });
     }
 
-    private static class MediaLoader implements NotificationCenter.NotificationCenterDelegate {
-
-        private AccountInstance currentAccount;
-        private AlertDialog progressDialog;
-        private ArrayList<MessageObject> messageObjects;
-        private HashMap<String, MessageObject> loadingMessageObjects = new HashMap<>();
-        private HashMap<String, File> loadedFiles = new HashMap<>();
-        private float finishedProgress;
-        private boolean cancelled;
-        private boolean finished;
-        private int copiedFiles;
-        private CountDownLatch waitingForFile;
-        private MessagesStorage.IntCallback onFinishRunnable;
-        private boolean isMusic;
-
-        public MediaLoader(Context context, AccountInstance accountInstance, ArrayList<MessageObject> messages, MessagesStorage.IntCallback onFinish) {
-            currentAccount = accountInstance;
-            messageObjects = messages;
-            onFinishRunnable = onFinish;
-            isMusic = messages.get(0).isMusic();
-            currentAccount.getNotificationCenter().addObserver(this, NotificationCenter.fileLoaded);
-            currentAccount.getNotificationCenter().addObserver(this, NotificationCenter.fileLoadProgressChanged);
-            currentAccount.getNotificationCenter().addObserver(this, NotificationCenter.fileLoadFailed);
-            final Theme.ResourcesProvider resourcesProvider = PhotoViewer.getInstance().isVisible() ? new DarkThemeResourceProvider() : null;
-            progressDialog = new AlertDialog(context, AlertDialog.ALERT_TYPE_LOADING, resourcesProvider);
-            progressDialog.setMessage(LocaleController.getString(R.string.Loading));
-            progressDialog.setCancelable(true);
-            progressDialog.setCancelDialog(true);
-            progressDialog.setOnCancelListener(d -> {
-                cancelled = true;
-            });
-        }
-
-        public void start() {
-            AndroidUtilities.runOnUIThread(() -> {
-                if (!finished) {
-                    progressDialog.show();
-                }
-            }, 250);
-
-            new Thread(() -> {
-                try {
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        for (int b = 0, N = messageObjects.size(); b < N; b++) {
-                            MessageObject message = messageObjects.get(b);
-                            if (processLivePhotoMessage(message)) {
-                                continue;
-                            }
-                            String path = message.messageOwner.attachPath;
-                            TLRPC.Document document = message.getDocument();
-                            if (message.qualityToSave != null) {
-                                document = message.qualityToSave;
-                                path = null;
-                            }
-                            String name = FileLoader.getDocumentFileName(document);
-                            if (path != null && path.length() > 0) {
-                                File temp = new File(path);
-                                if (!temp.exists()) {
-                                    path = null;
-                                }
-                            }
-                            if (TextUtils.isEmpty(path)) {
-                                final FileLoader fileLoader = FileLoader.getInstance(currentAccount.getCurrentAccount());
-                                final TLRPC.MessageMedia media = MessageObject.getMedia(message);
-                                File file = null;
-                                if (message.qualityToSave != null) {
-                                    file = fileLoader.getPathToAttach(message.qualityToSave, null, false, true);
-                                } else {
-                                    file = fileLoader.getPathToMessage(message.messageOwner, true);
-                                    if (media instanceof TLRPC.TL_messageMediaDocument) {
-                                        final TLRPC.TL_messageMediaDocument mediaDocument = (TLRPC.TL_messageMediaDocument) media;
-                                        if (!mediaDocument.alt_documents.isEmpty()) {
-                                            file = fileLoader.getPathToAttach(mediaDocument.alt_documents.get(0), null, false, true);
-                                        }
-                                    }
-                                }
-                                path = file.toString();
-                            }
-                            File sourceFile = new File(path);
-                            File loadedFile = null;
-                            if (!sourceFile.exists()) {
-                                waitingForFile = new CountDownLatch(1);
-                                addMessageToLoad(message);
-                                waitingForFile.await();
-                                loadedFile = loadedFiles.remove(FileLoader.getAttachFileName(document));
-                            }
-                            if (cancelled) {
-                                break;
-                            }
-                            if (!sourceFile.exists()) {
-                                sourceFile = loadedFile;
-                                FileLog.d("saving file: correcting path from " + path + " to " + (sourceFile == null ? null : sourceFile.getAbsolutePath()));
-                            }
-                            if (sourceFile != null && sourceFile.exists()) {
-                                saveFileInternal(isMusic ? 3 : 2, sourceFile, name);
-                                copiedFiles++;
-                            }
-                        }
-                    } else {
-                        File dir;
-                        if (isMusic) {
-                            dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC);
-                        } else {
-                            dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                        }
-                        dir.mkdir();
-                        for (int b = 0, N = messageObjects.size(); b < N; b++) {
-                            MessageObject message = messageObjects.get(b);
-                            if (processLivePhotoMessage(message)) {
-                                continue;
-                            }
-                            TLRPC.Document document = message.getDocument();
-                            if (message.qualityToSave != null) {
-                                document = message.qualityToSave;
-                            }
-                            String name = FileLoader.getDocumentFileName(document);
-                            File destFile = new File(dir, name);
-                            if (destFile.exists()) {
-                                int idx = name.lastIndexOf('.');
-                                for (int a = 0; a < 10; a++) {
-                                    String newName;
-                                    if (idx != -1) {
-                                        newName = name.substring(0, idx) + "(" + (a + 1) + ")" + name.substring(idx);
-                                    } else {
-                                        newName = name + "(" + (a + 1) + ")";
-                                    }
-                                    destFile = new File(dir, newName);
-                                    if (!destFile.exists()) {
-                                        break;
-                                    }
-                                }
-                            }
-                            if (!destFile.exists()) {
-                                destFile.createNewFile();
-                            }
-                            String path = message.messageOwner.attachPath;
-                            if (message.qualityToSave != null) {
-                                path = null;
-                            }
-                            if (path != null && path.length() > 0) {
-                                File temp = new File(path);
-                                if (!temp.exists()) {
-                                    path = null;
-                                }
-                            }
-                            File sourceFile;
-                            if (message.qualityToSave != null) {
-                                sourceFile = FileLoader.getInstance(currentAccount.getCurrentAccount()).getPathToAttach(message.qualityToSave, null, false, true);
-                            } else {
-                                if (path == null || path.length() == 0) {
-                                    path = FileLoader.getInstance(currentAccount.getCurrentAccount()).getPathToMessage(message.messageOwner).toString();
-                                }
-                                sourceFile = new File(path);
-                            }
-                            File loadedFile = null;
-                            if (!sourceFile.exists()) {
-                                waitingForFile = new CountDownLatch(1);
-                                addMessageToLoad(message);
-                                waitingForFile.await();
-                                loadedFile = loadedFiles.remove(FileLoader.getAttachFileName(document));
-                            }
-                            if (!sourceFile.exists()) {
-                                sourceFile = loadedFile;
-                            }
-                            if (sourceFile != null && sourceFile.exists()) {
-                                copyFile(sourceFile, destFile, message.getMimeType());
-                                copiedFiles++;
-                            }
-                        }
-                    }
-                    checkIfFinished();
-                } catch (Exception e) {
-                    FileLog.e(e);
-                }
-
-            }).start();
-        }
-
-        private void checkIfFinished() {
-            if (!loadingMessageObjects.isEmpty()) {
-                return;
-            }
-            AndroidUtilities.runOnUIThread(() -> {
-                try {
-                    if (progressDialog.isShowing()) {
-                        progressDialog.dismiss();
-                    } else {
-                        finished = true;
-                    }
-                    if (onFinishRunnable != null) {
-                        AndroidUtilities.runOnUIThread(() -> onFinishRunnable.run(copiedFiles));
-                    }
-                } catch (Exception e) {
-                    FileLog.e(e);
-                }
-                currentAccount.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoaded);
-                currentAccount.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadProgressChanged);
-                currentAccount.getNotificationCenter().removeObserver(this, NotificationCenter.fileLoadFailed);
-                loadedFiles.clear();
-            });
-        }
-
-        private boolean processLivePhotoMessage(MessageObject messageObject) throws Exception {
-            if (!messageObject.isLivePhoto()) {
-                return false;
-            }
-            final TLRPC.MessageMedia media = MessageObject.getMedia(messageObject.messageOwner);
-            if (media == null || media.photo == null || media.document == null) {
-                return false;
-            }
-            final TLRPC.PhotoSize photoSize = FileLoader.getClosestPhotoSizeWithSize(media.photo.sizes, AndroidUtilities.getPhotoSize(true), false, null, true);
-            if (photoSize == null) {
-                return false;
-            }
-            final FileLoader fileLoader = FileLoader.getInstance(currentAccount.getCurrentAccount());
-            File photoFile = fileLoader.getPathToAttach(photoSize, null, false, true);
-            File videoFile = fileLoader.getPathToAttach(media.document, null, false, true);
-
-            final boolean needPhoto = photoFile == null || !photoFile.exists();
-            final boolean needVideo = videoFile == null || !videoFile.exists();
-            final int needCount = (needPhoto ? 1 : 0) + (needVideo ? 1 : 0);
-            if (needCount > 0) {
-                waitingForFile = new CountDownLatch(needCount);
-                final TLRPC.Photo finalPhoto = media.photo;
-                final TLRPC.Document finalDoc = media.document;
-                AndroidUtilities.runOnUIThread(() -> {
-                    if (needPhoto) {
-                        String fileName = FileLoader.getAttachFileName(photoSize);
-                        loadingMessageObjects.put(fileName, messageObject);
-                        currentAccount.getFileLoader().loadFile(ImageLocation.getForPhoto(photoSize, finalPhoto), messageObject, "jpg", FileLoader.PRIORITY_HIGH, 0);
-                    }
-                    if (needVideo) {
-                        String fileName = FileLoader.getAttachFileName(finalDoc);
-                        loadingMessageObjects.put(fileName, messageObject);
-                        currentAccount.getFileLoader().loadFile(finalDoc, messageObject, FileLoader.PRIORITY_HIGH, 0);
-                    }
-                });
-                waitingForFile.await();
-                loadedFiles.remove(FileLoader.getAttachFileName(photoSize));
-                loadedFiles.remove(FileLoader.getAttachFileName(media.document));
-            }
-            if (cancelled) {
-                return true;
-            }
-            if (photoFile == null || !photoFile.exists()) {
-                photoFile = fileLoader.getPathToAttach(photoSize, null, true, true);
-            }
-            if (videoFile == null || !videoFile.exists()) {
-                videoFile = fileLoader.getPathToAttach(media.document, null, true, true);
-            }
-            if (photoFile == null || !photoFile.exists() || videoFile == null || !videoFile.exists()) {
-                return true;
-            }
-
-            String coverExt = FileLoader.getFileExtension(photoFile);
-            if (TextUtils.isEmpty(coverExt)) {
-                coverExt = "jpg";
-            }
-            String coverMime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(coverExt.toLowerCase());
-            if (TextUtils.isEmpty(coverMime)) {
-                coverMime = "image/jpeg";
-            }
-            final String filename = AndroidUtilities.generateFileName(0, coverExt);
-            final String outputMime = coverMime;
-            if (Build.VERSION.SDK_INT >= 29) {
-                final ContentValues cv = new ContentValues();
-                final Uri uriToInsert = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
-                final File dirDest = new File(Environment.DIRECTORY_DOWNLOADS, "Telegram");
-                cv.put(MediaStore.MediaColumns.RELATIVE_PATH, dirDest + File.separator);
-                cv.put(MediaStore.Downloads.DISPLAY_NAME, filename);
-                cv.put(MediaStore.MediaColumns.MIME_TYPE, outputMime);
-                final Uri dst = ApplicationLoader.applicationContext.getContentResolver().insert(uriToInsert, cv);
-                if (dst != null) {
-                    boolean ok = false;
-                    try (OutputStream os = ApplicationLoader.applicationContext.getContentResolver().openOutputStream(dst)) {
-                        if (os != null) {
-                            writeMotionPhoto(photoFile, videoFile, os, null);
-                            ok = !cancelled;
-                        }
-                    }
-                    if (ok) {
-                        copiedFiles++;
-                    } else {
-                        try {
-                            ApplicationLoader.applicationContext.getContentResolver().delete(dst, null, null);
-                        } catch (Exception ignored) {}
-                    }
-                }
-            } else {
-                final File destDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Telegram");
-                destDir.mkdirs();
-                File destFile = new File(destDir, filename);
-                if (!destFile.exists()) {
-                    destFile.createNewFile();
-                }
-                try (FileOutputStream fos = new FileOutputStream(destFile)) {
-                    writeMotionPhoto(photoFile, videoFile, fos, null);
-                }
-                if (cancelled) {
-                    destFile.delete();
-                } else {
-                    DownloadManager downloadManager = (DownloadManager) ApplicationLoader.applicationContext.getSystemService(Context.DOWNLOAD_SERVICE);
-                    downloadManager.addCompletedDownload(destFile.getName(), destFile.getName(), false, outputMime, destFile.getAbsolutePath(), destFile.length(), true);
-                    copiedFiles++;
-                }
-            }
-            finishedProgress += 100.0f / messageObjects.size();
-            final int progress = (int) finishedProgress;
-            AndroidUtilities.runOnUIThread(() -> {
-                try {
-                    progressDialog.setProgress(progress);
-                } catch (Exception e) {
-                    FileLog.e(e);
-                }
-            });
-            return true;
-        }
-
-        private void addMessageToLoad(MessageObject messageObject) {
-            AndroidUtilities.runOnUIThread(() -> {
-                TLRPC.Document document = messageObject.getDocument();
-                if (messageObject.qualityToSave != null) {
-                    document = messageObject.qualityToSave;
-                }
-                if (document == null) {
-                    return;
-                }
-                String fileName = FileLoader.getAttachFileName(document);
-                loadingMessageObjects.put(fileName, messageObject);
-                currentAccount.getFileLoader().loadFile(document, messageObject, FileLoader.PRIORITY_HIGH, messageObject.shouldEncryptPhotoOrVideo() ? 2 : 0);
-            });
-        }
-
-        private boolean copyFile(File sourceFile, File destFile, String mime) {
-            if (AndroidUtilities.isInternalUri(Uri.fromFile(sourceFile))) {
-                return false;
-            }
-            try (FileInputStream inputStream = new FileInputStream(sourceFile); FileChannel source = inputStream.getChannel(); FileChannel destination = new FileOutputStream(destFile).getChannel()) {
-                long size = source.size();
-                try {
-                    @SuppressLint("DiscouragedPrivateApi") Method getInt = FileDescriptor.class.getDeclaredMethod("getInt$");
-                    int fdint = (Integer) getInt.invoke(inputStream.getFD());
-                    if (AndroidUtilities.isInternalUri(fdint)) {
-                        if (progressDialog != null) {
-                            AndroidUtilities.runOnUIThread(() -> {
-                                try {
-                                    progressDialog.dismiss();
-                                } catch (Exception e) {
-                                    FileLog.e(e);
-                                }
-                            });
-                        }
-                        return false;
-                    }
-                } catch (Throwable e) {
-                    FileLog.e(e);
-                }
-                long lastProgress = 0;
-                for (long a = 0; a < size; a += 4096) {
-                    if (cancelled) {
-                        break;
-                    }
-                    destination.transferFrom(source, a, Math.min(4096, size - a));
-                    if (a + 4096 >= size || lastProgress <= SystemClock.elapsedRealtime() - 500) {
-                        lastProgress = SystemClock.elapsedRealtime();
-                        final int progress = (int) (finishedProgress + 100.0f / messageObjects.size() * a / size);
-                        AndroidUtilities.runOnUIThread(() -> {
-                            try {
-                                progressDialog.setProgress(progress);
-                            } catch (Exception e) {
-                                FileLog.e(e);
-                            }
-                        });
-                    }
-                }
-                if (!cancelled) {
-                    if (isMusic) {
-                        AndroidUtilities.addMediaToGallery(destFile);
-                    } else {
-                        DownloadManager downloadManager = (DownloadManager) ApplicationLoader.applicationContext.getSystemService(Context.DOWNLOAD_SERVICE);
-                        String mimeType = mime;
-                        if (TextUtils.isEmpty(mimeType)) {
-                            MimeTypeMap myMime = MimeTypeMap.getSingleton();
-                            String name = destFile.getName();
-                            int idx = name.lastIndexOf('.');
-                            if (idx != -1) {
-                                String ext = name.substring(idx + 1);
-                                mimeType = myMime.getMimeTypeFromExtension(ext.toLowerCase());
-                                if (TextUtils.isEmpty(mimeType)) {
-                                    mimeType = "text/plain";
-                                }
-                            } else {
-                                mimeType = "text/plain";
-                            }
-                        }
-                        downloadManager.addCompletedDownload(destFile.getName(), destFile.getName(), false, mimeType, destFile.getAbsolutePath(), destFile.length(), true);
-                    }
-                    finishedProgress += 100.0f / messageObjects.size();
-                    final int progress = (int) (finishedProgress);
-                    AndroidUtilities.runOnUIThread(() -> {
-                        try {
-                            progressDialog.setProgress(progress);
-                        } catch (Exception e) {
-                            FileLog.e(e);
-                        }
-                    });
-                    return true;
-                }
-            } catch (Exception e) {
-                FileLog.e(e);
-            }
-            destFile.delete();
-            return false;
-        }
-
-        @Override
-        public void didReceivedNotification(int id, int account, Object... args) {
-            if (id == NotificationCenter.fileLoaded || id == NotificationCenter.fileLoadFailed) {
-                String fileName = (String) args[0];
-                if (loadingMessageObjects.remove(fileName) != null) {
-                    if (id == NotificationCenter.fileLoaded && args.length > 1 && args[1] instanceof File) {
-                        loadedFiles.put(fileName, (File) args[1]);
-                    }
-                    waitingForFile.countDown();
-                }
-            } else if (id == NotificationCenter.fileLoadProgressChanged) {
-                String fileName = (String) args[0];
-                if (loadingMessageObjects.containsKey(fileName)) {
-                    Long loadedSize = (Long) args[1];
-                    Long totalSize = (Long) args[2];
-                    float loadProgress = loadedSize / (float) totalSize;
-                    final int progress = (int) (finishedProgress + loadProgress / messageObjects.size() * 100);
-                    AndroidUtilities.runOnUIThread(() -> {
-                        try {
-                            progressDialog.setProgress(progress);
-                        } catch (Exception e) {
-                            FileLog.e(e);
-                        }
-                    });
-                }
-            }
-        }
-    }
-
     public static void saveFilesFromMessages(Context context, AccountInstance accountInstance, ArrayList<MessageObject> messageObjects, final MessagesStorage.IntCallback onSaved) {
         if (messageObjects == null || messageObjects.isEmpty()) {
             return;
         }
-        new MediaLoader(context, accountInstance, messageObjects, onSaved).start();
+        FileExport.saveMessages(new ArrayList<>(messageObjects), null, onSaved);
+    }
+
+    public static void saveMessagesToGallery(ArrayList<MessageObject> messages, MessagesStorage.IntCallback onSaved) {
+        if (messages == null || messages.isEmpty()) return;
+        FileExport.saveMessages(new ArrayList<>(messages), FileExport.Target.GALLERY, onSaved);
     }
 
     public static void saveFile(String fullPath, Context context, final int type, final String name, final String mime) {
@@ -6273,6 +5832,12 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     }
 
     private static void writeMotionPhoto(File photoFile, File videoFile, OutputStream out, boolean[] cancelled) throws IOException {
+        writeMotionPhotoCancellable(photoFile, videoFile, out, () -> cancelled != null && cancelled[0]);
+    }
+
+    static void writeMotionPhotoCancellable(File photoFile, File videoFile, OutputStream out,
+                                           java.util.function.BooleanSupplier cancelled) throws IOException {
+        if (cancelled.getAsBoolean()) return;
         final long videoLength = videoFile.length();
         final String xmp = buildMotionPhotoXmp(videoLength);
         final byte[] xmpHeader = "http://ns.adobe.com/xap/1.0/ ".getBytes("UTF-8");
@@ -6299,7 +5864,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             final byte[] buf = new byte[64 * 1024];
             int n;
             while ((n = pis.read(buf)) > 0) {
-                if (cancelled != null && cancelled[0]) return;
+                if (cancelled.getAsBoolean()) return;
                 out.write(buf, 0, n);
             }
         }
@@ -6307,7 +5872,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             final byte[] buf = new byte[64 * 1024];
             int n;
             while ((n = vis.read(buf)) > 0) {
-                if (cancelled != null && cancelled[0]) return;
+                if (cancelled.getAsBoolean()) return;
                 out.write(buf, 0, n);
             }
         }

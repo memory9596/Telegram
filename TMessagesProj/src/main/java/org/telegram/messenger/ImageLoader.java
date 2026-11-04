@@ -1934,7 +1934,9 @@ public class ImageLoader {
             }
             if (imageReceiverArray.isEmpty()) {
                 if (imageLocation != null) {
-                    if (!forceLoadingImages.containsKey(key)) {
+                    String taskFileName = imageLocation.location != null ? FileLoader.getAttachFileName(imageLocation.location, ext)
+                            : imageLocation.document != null ? FileLoader.getAttachFileName(imageLocation.document) : null;
+                    if (!forceLoadingImages.containsKey(key) && !FileDownloadTasks.keepsFile(currentAccount, taskFileName)) {
                         if (imageLocation.location != null) {
                             FileLoader.getInstance(currentAccount).cancelLoadFile(imageLocation.location, ext);
                         } else if (imageLocation.document != null) {
