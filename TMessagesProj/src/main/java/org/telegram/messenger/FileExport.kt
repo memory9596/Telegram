@@ -8,6 +8,7 @@ import android.provider.MediaStore
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
+import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -30,6 +31,67 @@ object FileExport {
     fun interface Writer {
         @Throws(IOException::class)
         fun write(stream: OutputStream, cancelled: AtomicBoolean)
+    }
+
+    fun interface Composer {
+        @Throws(IOException::class)
+        fun write(source: File, companion: File, stream: OutputStream, cancelled: AtomicBoolean)
+    }
+
+    /** The action receives its owner without keeping a closed screen alive during a download. */
+    @JvmStatic
+    fun <T : Any> onSaved(owner: T, action: Utilities.Callback2<T, Int>): MessagesStorage.IntCallback {
+        val reference = WeakReference(owner)
+        return MessagesStorage.IntCallback { count -> reference.get()?.let { action.run(it, count) } }
+    }
+
+    private data class Request(val account: Int, val source: FileDownloadSource, val target: Target, val companion: FileDownloadSource?)
+
+    private fun request(message: MessageObject?, target: Target?): Request? {
+        val owner = message?.messageOwner ?: return null
+        val media = MessageObject.getMedia(owner) ?: return null
+        val photo = message.getPhoto()
+        val document = message.qualityToSave
+            ?: message.cachedQuality?.takeIf { it.isCached() }?.document
+            ?: message.getDocumentFast()
+        val source: FileDownloadSource
+        var companion: FileDownloadSource? = null
+        if (message.isLivePhoto() || document == null && photo != null) {
+            val size = photo?.sizes?.let {
+                FileLoader.getClosestPhotoSizeWithSize(it, AndroidUtilities.getPhotoSize(true), false, null, true)
+            } ?: return null
+            if (FileLoader.getAttachFileName(size).isEmpty()) return null
+            source = FileDownloadSource.photo(message, photo, size)
+            if (message.isLivePhoto()) {
+                companion = FileDownloadSource.document(message, media.document ?: return null)
+            }
+        } else {
+            source = FileDownloadSource.document(message, document ?: return null)
+        }
+        return Request(message.currentAccount, source, target ?: if (message.isMusic()) Target.MUSIC else Target.DOWNLOADS, companion)
+    }
+
+    @JvmStatic
+    fun saveMessages(messages: List<MessageObject?>?, target: Target?, onSaved: MessagesStorage.IntCallback?) {
+        val requests = messages.orEmpty().mapNotNull { request(it, target) }
+            .distinctBy { "${it.account}:${it.source.fileName}:${it.target}" }
+        AndroidUtilities.runOnUIThread {
+            if (requests.isEmpty()) {
+                onSaved?.run(0)
+                return@runOnUIThread
+            }
+            var remaining = requests.size
+            var saved = 0
+            for (request in requests) {
+                val composer = if (request.companion == null) null else Composer { photo, video, stream, cancelled ->
+                    MediaController.writeMotionPhotoCancellable(photo, video, stream) { cancelled.get() }
+                }
+                FileDownloadTasks.getInstance(request.account).export(request.source, request.target, request.companion, composer) { success ->
+                    if (success) saved++
+                    if (--remaining == 0) onSaved?.run(saved)
+                }
+            }
+        }
     }
 
     @JvmStatic
