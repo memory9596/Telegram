@@ -60,6 +60,7 @@ public class FileLoadOperation {
     private Runnable fileWriteRunnable;
     public boolean isStory;
     private boolean isVideoDocument;
+    public volatile boolean waitingForStream;
 
     public volatile boolean caughtPremiumFloodWait;
     public void setStream(FileLoadOperationStream stream, boolean streamPriority, long streamOffset) {
@@ -67,6 +68,7 @@ public class FileLoadOperation {
         this.stream = stream;
         this.streamOffset = streamOffset;
         this.streamPriority = streamPriority;
+        waitingForStream = false;
         Utilities.stageQueue.postRunnable(() -> {
             if (streamListeners == null) {
                 streamListeners = new ArrayList<>();
@@ -79,6 +81,9 @@ public class FileLoadOperation {
             }
             if (stream != null && state != stateDownloading && state != stateIdle) {
                 stream.newDataAvailable();
+            }
+            if (stream != null && started && state == stateDownloading && !paused) {
+                startDownloadRequest(-1);
             }
         });
     }
@@ -1319,6 +1324,7 @@ public class FileLoadOperation {
                         onFail(true, 0);
                     }
                 } else {
+                    if (downloadedBytes != 0) notifyStreamListeners();
                     startDownloadRequest(-1);
                 }
             });
@@ -2307,6 +2313,25 @@ public class FileLoadOperation {
         FileRefController.getInstance(currentAccount).requestReference(parentObject, location, this, requestInfo);
     }
 
+    private long getStreamDownloadOffset() {
+        long offset = Long.MAX_VALUE;
+        if (streamListeners == null) return offset;
+        // CDN verification needs complete hash blocks.
+        int alignment = isCdn ? cdnChunkCheckSize : currentDownloadChunkSize;
+        for (FileLoadOperationStream stream : streamListeners) {
+            long end = stream.getStreamEndOffset();
+            if (end == Long.MAX_VALUE) return -1;
+            if (end <= 0) continue;
+            long start = stream.getStreamStartOffset() / alignment * alignment;
+            end = Math.min(totalBytesCount, (Math.min(end, totalBytesCount) + alignment - 1) / alignment * alignment);
+            for (Range range : notRequestedBytesRanges) {
+                long next = Math.max(start, range.start);
+                if (next < Math.min(end, range.end)) offset = Math.min(offset, next);
+            }
+        }
+        return offset;
+    }
+
     protected void startDownloadRequest(int useConnectionType) {
         Utilities.stageQueue.cancelRunnable(pacedDownloadRequest);
         if (BuildVars.DEBUG_PRIVATE_VERSION) {
@@ -2423,6 +2448,17 @@ public class FileLoadOperation {
                             FileLog.d(fileName + " can't start request ranges finished" + notRequestedBytesRanges);
                         }
                         break;
+                    }
+                    if (FileDownloadTasks.isPlaybackOnly(currentAccount, fileName)) {
+                        long streamDownloadOffset = getStreamDownloadOffset();
+                        if (streamDownloadOffset == Long.MAX_VALUE) {
+                            if (requestInfos.isEmpty() && delayedRequestInfos.isEmpty() && !waitingForStream) {
+                                waitingForStream = true;
+                                FileLoader.getInstance(currentAccount).getFileLoaderQueue().postRunnable(() -> getQueue().checkLoadingOperations());
+                            }
+                            break;
+                        }
+                        if (streamDownloadOffset >= 0) downloadOffset = streamDownloadOffset;
                     }
                 } else {
                     downloadOffset = requestedBytesCount;

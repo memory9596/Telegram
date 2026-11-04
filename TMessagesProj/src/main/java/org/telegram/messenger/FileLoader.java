@@ -742,6 +742,11 @@ public class FileLoader extends BaseController {
         return false;
     }
 
+    public boolean isWaitingForStream(String fileName) {
+        FileLoadOperation operation = fileName == null ? null : loadOperationPaths.get(fileName);
+        return operation != null && operation.waitingForStream;
+    }
+
     public boolean isLoadingFile(final String fileName) {
         return fileName != null && loadOperationPathsUI.containsKey(fileName);
     }
