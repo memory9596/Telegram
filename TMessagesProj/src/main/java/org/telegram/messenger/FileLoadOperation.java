@@ -219,6 +219,9 @@ public class FileLoadOperation {
     private volatile int state = stateIdle;
     private volatile boolean paused;
     private long downloadedBytes;
+    private long receivedBytes;
+    private long lastReceivedBytes;
+    private long speedTime;
     public long totalBytesCount;
     private long bytesCountPadding;
     private long streamStartOffset;
@@ -893,6 +896,11 @@ public class FileLoadOperation {
         }
         final boolean alreadyStarted = state != stateIdle;
         final boolean wasPaused = paused;
+        if (wasPaused) {
+            synchronized (this) {
+                speedTime = 0;
+            }
+        }
         paused = false;
         if (stream != null) {
             Utilities.stageQueue.postRunnable(() -> {
@@ -1342,6 +1350,17 @@ public class FileLoadOperation {
         if (delegate != null && downloadedBytes != totalBytesCount && totalBytesCount > 0) {
             delegate.didChangedLoadProgress(FileLoadOperation.this, downloadedBytes, totalBytesCount);
         }
+    }
+
+    // Sample network payload only; merging local preload ranges also advances download progress.
+    synchronized long getDownloadSpeed() {
+        long now = SystemClock.elapsedRealtime();
+        long elapsed = now - speedTime;
+        long speed = speedTime == 0 || elapsed <= 0 || paused || state != stateDownloading
+                ? 0 : (receivedBytes - lastReceivedBytes) * 1000 / elapsed;
+        lastReceivedBytes = receivedBytes;
+        speedTime = now;
+        return speed;
     }
 
     public boolean isPaused() {
@@ -2666,6 +2685,14 @@ public class FileLoadOperation {
                         requestInfo.responseCdn = (TLRPC.TL_upload_cdnFile) response;
                     }
                     if (response != null) {
+                        NativeByteBuffer bytes = requestInfo.response != null ? requestInfo.response.bytes
+                                : requestInfo.responseWeb != null ? requestInfo.responseWeb.bytes
+                                : requestInfo.responseCdn != null ? requestInfo.responseCdn.bytes : null;
+                        if (bytes != null) {
+                            synchronized (FileLoadOperation.this) {
+                                receivedBytes += bytes.limit();
+                            }
+                        }
                         if (currentType == ConnectionsManager.FileTypeAudio) {
                             StatsController.getInstance(currentAccount).incrementReceivedBytesCount(response.networkType, StatsController.TYPE_AUDIOS, response.getObjectSize() + 4);
                         } else if (currentType == ConnectionsManager.FileTypeVideo) {
