@@ -6,4 +6,16 @@
     <string name="UserRestrictionsSendInline">机器人内容</string>
     <string name="Repeat">复读</string>
     <string name="QuickShare">快速转发</string>
+    <string name="PlaybackCache">播放缓存</string>
+    <string name="DownloadPaused">下载已暂停</string>
+    <string name="DownloadFailed">下载失败</string>
+    <string name="DownloadTimeLeft">剩余 %s</string>
+    <string name="CacheComplete">缓存完成</string>
+    <string name="ReadyToShare">可以分享了</string>
+    <string name="FileSaved">文件已保存</string>
+    <string name="CancelAll">取消所有</string>
+    <string name="RemoveDownloadTasks">移除任务</string>
+    <string name="RemoveDownloadTasksTitle_one">移除 %d 个下载任务</string>
+    <string name="RemoveDownloadTasksTitle_other">移除 %d 个下载任务</string>
+    <string name="RemoveDownloadTasksMessage">取消未完成的任务，并从下载列表中移除所选记录。已下载和已保存的文件会保留。</string>
 </resources>

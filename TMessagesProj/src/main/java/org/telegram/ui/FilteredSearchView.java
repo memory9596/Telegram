@@ -1141,7 +1141,7 @@ public class FilteredSearchView extends FrameLayout implements Theme.Colorable, 
         } else if (currentSearchFilter.filterType == FiltersView.FILTER_TYPE_FILES) {
             if (view instanceof SharedDocumentCell) {
                 SharedDocumentCell cell = (SharedDocumentCell) view;
-                TLRPC.Document document = message.getDocument();
+                TLRPC.Document document = message.getDownloadDocument();
                 if (cell.isLoaded()) {
                     if (message.canPreviewDocument()) {
                         PhotoViewer.getInstance().setParentActivity(parentFragment);
@@ -1163,10 +1163,10 @@ public class FilteredSearchView extends FrameLayout implements Theme.Colorable, 
                 } else if (!cell.isLoading()) {
                     MessageObject messageObject = cell.getMessage();
                     messageObject.putInDownloadsStore = true;
-                    AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().loadFile(document, messageObject, FileLoader.PRIORITY_LOW, 0);
+                    FileLoader.getInstance(message.currentAccount).loadFileByUser(document, messageObject, FileLoader.PRIORITY_LOW, 0);
                     cell.updateFileExistIcon(true);
                 } else {
-                    AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().cancelLoadFile(document);
+                    FileLoader.getInstance(message.currentAccount).cancelLoadFileByUser(document, message);
                     cell.updateFileExistIcon(true);
                 }
             }

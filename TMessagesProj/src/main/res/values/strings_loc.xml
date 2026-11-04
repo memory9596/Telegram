@@ -6,4 +6,16 @@
     <string name="UserRestrictionsSendInline">Send Inline Content</string>
     <string name="Repeat">Repeat</string>
     <string name="QuickShare">Quick Share</string>
+    <string name="PlaybackCache">Playback cache</string>
+    <string name="DownloadPaused">Download paused</string>
+    <string name="DownloadFailed">Download failed</string>
+    <string name="DownloadTimeLeft">%s left</string>
+    <string name="CacheComplete">Cache complete</string>
+    <string name="ReadyToShare">Ready to share</string>
+    <string name="FileSaved">File saved</string>
+    <string name="CancelAll">Cancel all</string>
+    <string name="RemoveDownloadTasks">Remove tasks</string>
+    <string name="RemoveDownloadTasksTitle_one">Remove %d download task</string>
+    <string name="RemoveDownloadTasksTitle_other">Remove %d download tasks</string>
+    <string name="RemoveDownloadTasksMessage">Unfinished tasks will be cancelled and the selected entries removed from the download list. Downloaded and saved files will be kept.</string>
 </resources>

@@ -48,9 +48,9 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
     private long bytesRemaining;
     private long bytesTransferred;
     private long requestedLength;
-    private boolean opened;
+    private volatile boolean opened;
     private long currentOffset;
-    private CountDownLatch countDownLatch;
+    private volatile CountDownLatch countDownLatch;
     private RandomAccessFile file;
     private TLRPC.Document document;
     private Object parentObject;
@@ -108,6 +108,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
         currentOffset = dataSpec.position;
         requestedLength = dataSpec.length;
         loadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, null, parentObject, currentOffset, false, getCurrentPriority());
+        if (loadOperation == null) { allStreams.remove(document.id, this); throw new IOException("Video download paused or cancelled"); }
         bytesTransferred = 0;
         bytesRemaining = document.size - dataSpec.position;
         if (requestedLength != C.LENGTH_UNSET) {
@@ -160,11 +161,13 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
                 if (bytesRemaining < readLength) {
                     readLength = (int) bytesRemaining;
                 }
-                while ((availableLength == 0 && opened) || file == null) {
+                while (opened && (availableLength == 0 || file == null)) {
+                    if (FileDownloadTasks.isBlocked(currentAccount, document)) throw new IOException("Stream download stopped");
                     availableLength = (int) loadOperation.getDownloadedLengthFromOffset(currentOffset, readLength)[0];
                     if (availableLength == 0) {
                         countDownLatch = new CountDownLatch(1);
                         FileLoadOperation loadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, null, parentObject, currentOffset, false, getCurrentPriority());
+                        if (loadOperation == null) throw new IOException("Stream download stopped");
                         if (this.loadOperation != loadOperation) {
 //                            FileLog.e("FileStreamLoadOperation " + document.id + " read: changed operation!");
                             this.loadOperation.removeStreamListener(this);
@@ -206,6 +209,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
                                 if (loadOperation.isFinished() && !currentFile.exists()) {
                                     FileLoader.getInstance(currentAccount).cancelLoadFile(loadOperation.getFileName());
                                     FileLoadOperation newLoadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, null, parentObject, currentOffset, false, getCurrentPriority());
+                                    if (newLoadOperation == null) throw new IOException("Stream download stopped");
                                     if (this.loadOperation != newLoadOperation) {
 //                            FileLog.e("FileStreamLoadOperation " + document.id + " read: changed operation!");
                                         this.loadOperation.removeStreamListener(this);
@@ -246,7 +250,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
 
     @Override
     public void close() {
-        FileLog.e("FileStreamLoadOperation " + document.id + " close me=" + this);
+        FileLog.e("FileStreamLoadOperation " + (document == null ? 0 : document.id) + " close me=" + this);
         if (loadOperation != null) {
             loadOperation.removeStreamListener(this);
         }
@@ -259,7 +263,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
             file = null;
         }
         uri = null;
-        allStreams.remove(document.id);
+        if (document != null) allStreams.remove(document.id, this);
         if (opened) {
             opened = false;
             transferEnded();

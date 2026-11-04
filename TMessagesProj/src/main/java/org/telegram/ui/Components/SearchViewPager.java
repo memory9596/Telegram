@@ -15,7 +15,6 @@ import android.graphics.RectF;
 import android.graphics.drawable.AnimatedVectorDrawable;
 import android.os.Build;
 import android.os.Bundle;
-import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
@@ -879,7 +878,7 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
             }
             gotoItem = actionMode.addItemWithWidth(gotoItemId, R.drawable.msg_message, AndroidUtilities.dp(54), getString(R.string.AccDescrGoToMessage));
             forwardItem = actionMode.addItemWithWidth(forwardItemId, R.drawable.msg_forward, AndroidUtilities.dp(54), getString(R.string.Forward));
-            deleteItem = actionMode.addItemWithWidth(deleteItemId, R.drawable.msg_delete, AndroidUtilities.dp(54), getString(R.string.Delete));
+            deleteItem = actionMode.addItemWithWidth(deleteItemId, R.drawable.msg_delete, AndroidUtilities.dp(54), getString(R.string.RemoveDownloadTasks));
         }
         if (selectedMessagesCountTextView != null) {
             boolean isForumSearch = dialogsSearchAdapter != null && dialogsSearchAdapter.delegate != null && dialogsSearchAdapter.delegate.getSearchForumDialogId() != 0;
@@ -943,19 +942,12 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
             }
             ArrayList<MessageObject> messageObjects = new ArrayList<>(selectedFiles.values());
             AlertDialog.Builder builder = new AlertDialog.Builder(parent.getParentActivity());
-            builder.setTitle(LocaleController.formatPluralString("RemoveDocumentsTitle", selectedFiles.size()));
-
-            SpannableStringBuilder spannableStringBuilder = new SpannableStringBuilder();
-            spannableStringBuilder
-                    .append(AndroidUtilities.replaceTags(LocaleController.formatPluralString("RemoveDocumentsMessage", selectedFiles.size())))
-                    .append("\n\n")
-                    .append(getString(R.string.RemoveDocumentsAlertMessage));
-
-            builder.setMessage(spannableStringBuilder);
+            builder.setTitle(LocaleController.formatPluralString("RemoveDownloadTasksTitle", messageObjects.size()));
+            builder.setMessage(getString(R.string.RemoveDownloadTasksMessage));
             builder.setNegativeButton(getString(R.string.Cancel), (dialogInterface, i) -> dialogInterface.dismiss());
-            builder.setPositiveButton(getString(R.string.Delete), (dialogInterface, i) -> {
+            builder.setPositiveButton(getString(R.string.RemoveDownloadTasks), (dialogInterface, i) -> {
                 dialogInterface.dismiss();
-                parent.getDownloadController().deleteRecentFiles(messageObjects);
+                parent.getDownloadController().removeDownloadTasks(messageObjects);
                 hideActionMode();
             });
             AlertDialog alertDialog = builder.show();
