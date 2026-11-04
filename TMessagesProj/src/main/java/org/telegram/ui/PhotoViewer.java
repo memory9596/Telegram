@@ -8754,6 +8754,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     title.setSpan(new ForegroundColorSpan(Theme.multAlpha(0xFFFFFFFF, .5f)), start, title.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 }
                 ActionBarMenuSubItem item = ActionBarMenuItem.addItem(videoQualityLayout, 0, title, true, null);
+                item.getCheckView().getCheckBoxBase().setResourcesProvider(key ->
+                        key == Theme.key_actionBarDefaultSubmenuItem ? Color.WHITE : Theme.getColor(key, resourcesProvider));
                 if (SharedConfig.debugVideoQualities && q != null) {
                     StringBuilder subtext = new StringBuilder();
                     for (VideoPlayer.VideoUri uri : q.uris) {
@@ -8767,7 +8769,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 } else {
                     item.setSubtext("");
                 }
-                item.setChecked(i == videoPlayer.getSelectedQuality());
+                item.getCheckView().setChecked(i == videoPlayer.getSelectedQuality(), false);
                 item.setColors(0xfffafafa, 0xfffafafa);
                 final int index = i;
                 item.setVisibility(visible ? View.VISIBLE : View.GONE);
@@ -8849,7 +8851,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 } else {
                     item.setSubtext("");
                 }
-                item.setChecked(i == videoPlayer.getSelectedQuality());
+                item.getCheckView().setChecked(i == videoPlayer.getSelectedQuality(), false);
                 final int index = i;
                 item.setOnClickListener((view) -> {
                     chooseQuality(index);
