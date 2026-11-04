@@ -105,6 +105,7 @@ import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.ViewTreeObserver;
 import android.view.WindowManager;
+import android.webkit.MimeTypeMap;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -171,6 +172,7 @@ import org.telegram.messenger.Emoji;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileDownloadTasks;
 import org.telegram.messenger.FileExport;
+import org.telegram.messenger.FileDownloadSource;
 import org.telegram.messenger.VideoStreamingProvider;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.FileStreamLoadOperation;
@@ -4657,6 +4659,21 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         if (!saving) openReadyVideoShare();
     }
 
+    private void saveViewerMessagesToGallery(ArrayList<MessageObject> messages) {
+        boolean video = false, photo = false, livePhoto = false;
+        for (MessageObject message : messages) {
+            if (message.isLivePhoto()) livePhoto = true;
+            else if (message.isVideo()) video = true;
+            else photo = true;
+        }
+        final boolean hasVideo = video, hasPhoto = photo, hasLivePhoto = livePhoto;
+        MediaController.saveMessagesToGallery(messages, FileExport.onSaved(this, (viewer, count) -> {
+            if (count > 0 && viewer.isVisible && viewer.parentActivity != null && viewer.containerView != null) {
+                BulletinFactory.createSaveMediaToGalleryBulletin(viewer.containerView, count, hasVideo, hasPhoto, hasLivePhoto, 0xf9222222, 0xffffffff).show();
+            }
+        }));
+    }
+
     private void openReadyVideoShare() {
         if (parentActivity == null || !isVisible || viewerInBackground || ApplicationLoader.mainInterfacePaused
                 || externalPlaybackTransition || !isManagedVideo() || !allowShare || openingReadyShare) return;
@@ -5118,194 +5135,56 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                         return;
                     }
 
-                    ArrayList<MessageObject> msgs = new ArrayList<>(1);
-                    MessageObject.GroupedMessages group = parentChatActivity != null ? parentChatActivity.getGroup(currentMessageObject.getGroupId()) : null;
-                    if (group != null) {
-                        msgs.addAll(group.messages);
-                    } else {
-                        msgs.add(currentMessageObject);
-                    }
-
-                    if (msgs.size() <= 1) {
-                        File f = null;
-                        final boolean isVideo;
-                        if (currentMessageObject != null) {
-                            if (MessageObject.getMedia(currentMessageObject.messageOwner) instanceof TLRPC.TL_messageMediaWebPage && MessageObject.getMedia(currentMessageObject.messageOwner).webpage != null && MessageObject.getMedia(currentMessageObject.messageOwner).webpage.document == null) {
-                                TLObject fileLocation = getFileLocation(currentIndex, null);
-                                f = FileLoader.getInstance(currentAccount).getPathToAttach(fileLocation, true);
-                                if (!f.exists()) {
-                                    f = new File(FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE), f.getName());
-                                }
-                            } else {
-                                f = FileLoader.getInstance(currentAccount).getPathToMessage(currentMessageObject.messageOwner);
-                            }
-                            isVideo = currentMessageObject.isVideo();
-                        } else if (currentFileLocationVideo != null) {
+                    if (currentMessageObject == null) {
+                        File file = null;
+                        boolean video = false;
+                        if (currentFileLocationVideo != null) {
                             String ext = getFileLocationExt(currentFileLocationVideo);
-                            f = FileLoader.getInstance(currentAccount).getPathToAttach(getFileLocation(currentFileLocationVideo), ext, avatarsDialogId != 0 || isEvent);
-                            if (f != null && !f.exists()) {
-                                f = FileLoader.getInstance(currentAccount).getPathToAttach(getFileLocation(currentFileLocationVideo), ext, false);
-                            }
-                            if (ext != null) {
-                                ext = ext.toLowerCase();
-                            }
-                            isVideo = ext != null && (ext.equals("webm") || ext.equals("mp4") || ext.equals("gif"));
+                            file = FileLoader.getInstance(currentAccount).getPathToAttach(getFileLocation(currentFileLocationVideo), ext, avatarsDialogId != 0 || isEvent);
+                            if (file != null && !file.exists()) file = FileLoader.getInstance(currentAccount).getPathToAttach(getFileLocation(currentFileLocationVideo), ext, false);
+                            video = ext != null && (ext.equalsIgnoreCase("webm") || ext.equalsIgnoreCase("mp4") || ext.equalsIgnoreCase("gif"));
                         } else if (pageBlocksAdapter != null) {
-                            f = pageBlocksAdapter.getFile(currentIndex);
-                            isVideo = pageBlocksAdapter.isVideo(currentIndex);
-                        } else {
-                            isVideo = false;
+                            file = pageBlocksAdapter.getFile(currentIndex);
+                            video = pageBlocksAdapter.isVideo(currentIndex);
                         }
-                        if (f != null && !f.exists()) {
-                            f = new File(FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE), f.getName());
-                        }
-
-                        final boolean isLivePhoto = currentMessageObject != null && currentMessageObject.isLivePhoto();
-                        File videoFileForLivePhoto = null;
-                        if (isLivePhoto) {
-                            final TLRPC.Document videoDoc = MessageObject.getMedia(currentMessageObject.messageOwner) != null
-                                    ? MessageObject.getMedia(currentMessageObject.messageOwner).document
-                                    : null;
-                            if (videoDoc != null) {
-                                videoFileForLivePhoto = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, false);
-                                if (videoFileForLivePhoto == null || !videoFileForLivePhoto.exists()) {
-                                    videoFileForLivePhoto = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, true);
+                        if (file != null && !file.exists()) file = new File(FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE), file.getName());
+                        if (file != null && file.isFile()) {
+                            final boolean isVideo = video;
+                            String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(FileLoader.getFileExtension(file).toLowerCase());
+                            MessagesStorage.IntCallback onSaved = FileExport.onSaved(PhotoViewer.this, (viewer, count) -> {
+                                if (count > 0 && viewer.isVisible && viewer.parentActivity != null && viewer.containerView != null) {
+                                    BulletinFactory.createSaveToGalleryBulletin(viewer.containerView, isVideo, 0xf9222222, 0xffffffff).show();
                                 }
-                            }
-                        }
-                        if (isLivePhoto) {
-                            if (f != null && f.exists() && videoFileForLivePhoto != null && videoFileForLivePhoto.exists()) {
-                                MediaController.saveFile(f.toString(), videoFileForLivePhoto.toString(), parentActivity, uri -> BulletinFactory.createSaveToGalleryBulletin(containerView, false, true, 0xf9222222, 0xffffffff).show());
-                            } else {
-                                showDownloadAlert();
-                            }
-                        } else if (f != null && f.exists()) {
-                            MediaController.saveFile(f.toString(), parentActivity, isVideo ? 1 : 0, null, null, uri -> BulletinFactory.createSaveToGalleryBulletin(containerView, isVideo, 0xf9222222, 0xffffffff).show());
-                        } else {
-                            showDownloadAlert();
-                        }
+                            });
+                            FileDownloadTasks.getInstance(currentAccount).export(FileDownloadSource.local(file, mime), FileExport.Target.GALLERY,
+                                    success -> onSaved.run(success ? 1 : 0));
+                        } else showDownloadAlert();
                     } else {
-                        boolean hasVideo_ = false, hasPhoto_ = false, hasLivePhoto_ = false;
-                        for (int i = 0; i < msgs.size(); ++i) {
-                            MessageObject m = msgs.get(i);
-                            if (m.isLivePhoto()) {
-                                hasLivePhoto_ = true;
-                            } else if (m.isVideo()) {
-                                hasVideo_ = true;
-                            } else {
-                                hasPhoto_ = true;
-                            }
+                        final MessageObject message = currentMessageObject;
+                        ArrayList<MessageObject> messages = new ArrayList<>();
+                        MessageObject.GroupedMessages group = parentChatActivity == null ? null : parentChatActivity.getGroup(message.getGroupId());
+                        if (group != null) messages.addAll(group.messages); else messages.add(message);
+                        if (messages.size() <= 1) {
+                            saveViewerMessagesToGallery(messages);
+                        } else {
+                            boolean photos = true;
+                            for (MessageObject item : messages) photos &= item.isPhoto() && !item.isLivePhoto();
+                            AlertDialog dialog = new AlertDialog.Builder(parentActivity, resourcesProvider)
+                                    .setTitle(getString(R.string.SaveGroupMedia))
+                                    .setMessage(getString(R.string.SaveGroupMediaMessage))
+                                    .setDialogButtonColorKey(Theme.key_voipgroup_listeningText)
+                                    .setNegativeButton(getString(message.isVideo() && !message.isLivePhoto() ? R.string.ThisMedia : R.string.ThisPhoto), (di, which) -> {
+                                        ArrayList<MessageObject> single = new ArrayList<>();
+                                        single.add(message);
+                                        saveViewerMessagesToGallery(single);
+                                    })
+                                    .setPositiveButton(LocaleController.formatPluralString(photos ? "AllNPhotos" : "AllNMedia", messages.size()),
+                                            (di, which) -> saveViewerMessagesToGallery(messages))
+                                    .setNeutralButton(getString(R.string.Cancel), (di, which) -> di.dismiss()).create();
+                            dialog.setBackgroundColor(getThemedColor(Theme.key_voipgroup_dialogBackground));
+                            dialog.setTextColor(getThemedColor(Theme.key_voipgroup_actionBarItems));
+                            dialog.show();
                         }
-                        final boolean hasVideo = hasVideo_;
-                        final boolean hasPhoto = hasPhoto_;
-                        final boolean hasLivePhoto = hasLivePhoto_;
-                        final boolean isVideo = hasVideo && !hasPhoto && !hasLivePhoto;
-                        AlertDialog dialog = new AlertDialog.Builder(parentActivity, resourcesProvider)
-                                .setTitle(getString("SaveGroupMedia", R.string.SaveGroupMedia))
-                                .setMessage(getString("SaveGroupMediaMessage", R.string.SaveGroupMediaMessage))
-                                .setDialogButtonColorKey(Theme.key_voipgroup_listeningText)
-                                .setNegativeButton(((currentMessageObject == null || !currentMessageObject.isVideo() || currentMessageObject.isLivePhoto()) ? getString("ThisPhoto", R.string.ThisPhoto) : getString("ThisMedia", R.string.ThisMedia)), (di, a) -> {
-                                    if (currentMessageObject == null) {
-                                        return;
-                                    }
-
-                                    File f;
-                                    if (MessageObject.getMedia(currentMessageObject.messageOwner) instanceof TLRPC.TL_messageMediaWebPage && MessageObject.getMedia(currentMessageObject.messageOwner).webpage != null && MessageObject.getMedia(currentMessageObject.messageOwner).webpage.document == null) {
-                                        TLObject fileLocation = getFileLocation(currentIndex, null);
-                                        f = FileLoader.getInstance(currentAccount).getPathToAttach(fileLocation, true);
-                                    } else {
-                                        f = FileLoader.getInstance(currentAccount).getPathToMessage(currentMessageObject.messageOwner);
-                                    }
-                                    boolean isThisVideo = currentMessageObject.isVideo();
-                                    final boolean isThisLivePhoto = currentMessageObject.isLivePhoto();
-                                    File videoFileForLivePhoto = null;
-                                    if (isThisLivePhoto) {
-                                        final TLRPC.Document videoDoc = MessageObject.getMedia(currentMessageObject.messageOwner) != null
-                                                ? MessageObject.getMedia(currentMessageObject.messageOwner).document
-                                                : null;
-                                        if (videoDoc != null) {
-                                            videoFileForLivePhoto = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, false);
-                                            if (videoFileForLivePhoto == null || !videoFileForLivePhoto.exists()) {
-                                                videoFileForLivePhoto = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, true);
-                                            }
-                                        }
-                                    }
-
-                                    if (isThisLivePhoto) {
-                                        if (f != null && f.exists() && videoFileForLivePhoto != null && videoFileForLivePhoto.exists()) {
-                                            MediaController.saveFile(f.toString(), videoFileForLivePhoto.toString(), parentActivity, uri -> BulletinFactory.createSaveToGalleryBulletin(containerView, false, true, 0xf9222222, 0xffffffff).show());
-                                        } else {
-                                            showDownloadAlert();
-                                        }
-                                    } else if (f != null && f.exists()) {
-                                        MediaController.saveFile(f.toString(), parentActivity, isThisVideo ? 1 : 0, null, null, uri -> BulletinFactory.createSaveToGalleryBulletin(containerView, isThisVideo, 0xf9222222, 0xffffffff).show());
-                                    } else {
-                                        showDownloadAlert();
-                                    }
-                                })
-                                .setPositiveButton((!hasVideo && !hasLivePhoto) ? LocaleController.formatPluralString("AllNPhotos", msgs.size()) : LocaleController.formatPluralString("AllNMedia", msgs.size()), (di, a) -> {
-                                    final int[] count = new int[1];
-                                    final int[] done = new int[1];
-                                    Runnable bulletin = () -> {
-                                        done[0]++;
-                                        if (done[0] == count[0]) {
-                                            BulletinFactory.createSaveMediaToGalleryBulletin(containerView, count[0], hasVideo, hasPhoto, hasLivePhoto, 0xf9222222, 0xffffffff).show();
-                                        }
-                                    };
-                                    for (int i = 0; i < msgs.size(); ++i) {
-                                        MessageObject msg = msgs.get(i);
-                                        if (msg == null) {
-                                            continue;
-                                        }
-
-                                        File f;
-                                        if (MessageObject.getMedia(msg.messageOwner) instanceof TLRPC.TL_messageMediaWebPage && MessageObject.getMedia(msg.messageOwner).webpage != null && MessageObject.getMedia(msg.messageOwner).webpage.document == null) {
-                                            f = FileLoader.getInstance(currentAccount).getPathToAttach(getFileLocation(currentIndex, null), true);
-                                        } else {
-                                            f = FileLoader.getInstance(currentAccount).getPathToMessage(msg.messageOwner);
-                                        }
-                                        boolean isThisVideo = msg.isVideo();
-                                        final boolean isThisLivePhoto = msg.isLivePhoto();
-                                        File videoFileForLivePhoto = null;
-                                        if (isThisLivePhoto) {
-                                            final TLRPC.Document videoDoc = MessageObject.getMedia(msg.messageOwner) != null
-                                                    ? MessageObject.getMedia(msg.messageOwner).document
-                                                    : null;
-                                            if (videoDoc != null) {
-                                                videoFileForLivePhoto = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, false);
-                                                if (videoFileForLivePhoto == null || !videoFileForLivePhoto.exists()) {
-                                                    videoFileForLivePhoto = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, true);
-                                                }
-                                            }
-                                        }
-
-                                        if (isThisLivePhoto && f != null && f.exists()) {
-                                            count[0]++;
-                                            if (videoFileForLivePhoto != null && videoFileForLivePhoto.exists()) {
-                                                MediaController.saveFile(f.toString(), videoFileForLivePhoto.toString(), parentActivity, uri -> AndroidUtilities.runOnUIThread(bulletin));
-                                            } else {
-                                                MediaController.saveFile(f.toString(), parentActivity, 0, null, null, uri -> AndroidUtilities.runOnUIThread(bulletin));
-                                            }
-                                        } else if (!isThisLivePhoto && f != null && f.exists()) {
-                                            count[0]++;
-                                            MediaController.saveFile(f.toString(), parentActivity, isThisVideo ? 1 : 0, null, null, uri -> AndroidUtilities.runOnUIThread(bulletin));
-                                        }
-                                    }
-                                })
-                                .setNeutralButton(getString("Cancel", R.string.Cancel), (di, a) -> {
-                                    di.dismiss();
-                                }).create();
-                        dialog.setBackgroundColor(getThemedColor(Theme.key_voipgroup_dialogBackground));
-                        dialog.show();
-                        View neutralButton = dialog.getButton(Dialog.BUTTON_NEUTRAL);
-                        if (neutralButton instanceof TextView) {
-                            ThemeBind.textColor((TextView) neutralButton, Theme.key_text_RedBold, PhotoViewer.this.resourcesProvider);
-                            neutralButton.setBackground(Theme.getRoundRectSelectorDrawable(getThemedColor(Theme.key_text_RedBold)));
-                            if (dialog.getButtonsLayout() instanceof LinearLayout && ((LinearLayout) dialog.getButtonsLayout()).getOrientation() == LinearLayout.VERTICAL) {
-                                neutralButton.bringToFront();
-                            }
-                        }
-                        dialog.setTextColor(getThemedColor(Theme.key_voipgroup_actionBarItems));
                     }
                 } else if (id == gallery_menu_chromecast) {
                     ChromecastController.getInstance().setCurrentMediaAndCastIfNeeded(getCurrentChromecastMedia());
@@ -18849,7 +18728,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             releasePlayer(true);
         }
         releaseVideoPlayback();
-        if (currentMessageObject != null && !currentMessageObject.isVideo() && !currentMessageObject.putInDownloadsStore) {
+        if (currentMessageObject != null && !currentMessageObject.isVideo() && !currentMessageObject.putInDownloadsStore
+                && !FileDownloadTasks.keepsFile(currentAccount, currentMessageObject.getDocument())) {
             FileLoader.getInstance(currentAccount).cancelLoadFile(currentMessageObject.getDocument());
         }
         isVisible = false;
@@ -19622,7 +19502,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         if (currentMessageObject != null) {
             releasePlayer(false);
             releaseVideoPlayback();
-            if (!currentMessageObject.isVideo()) FileLoader.getInstance(currentAccount).cancelLoadFile(currentMessageObject.getDocument());
+            if (!currentMessageObject.isVideo() && !FileDownloadTasks.keepsFile(currentAccount, currentMessageObject.getDocument())) FileLoader.getInstance(currentAccount).cancelLoadFile(currentMessageObject.getDocument());
         } else if (currentPageBlock != null) {
             final TLObject media = pageBlocksAdapter.getMedia(currentIndex);
             if (media instanceof TLRPC.Document) {

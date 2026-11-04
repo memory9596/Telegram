@@ -157,6 +157,12 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     private static final class Export {
         final AtomicBoolean cancelled = new AtomicBoolean();
         boolean started;
+        boolean failed;
+        final ArrayList<FileExport.Callback> callbacks = new ArrayList<>();
+        FileDownloadSource companion;
+        int registration;
+        File companionFile;
+        FileExport.Composer composer;
     }
 
     private static final class Entry {
@@ -209,10 +215,9 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
 
     private static final class Consumer {
         final int id = nextConsumer.incrementAndGet();
-        final String purpose;
         final ReadyCallback callback;
         boolean delivered;
-        Consumer(String purpose, ReadyCallback callback) { this.purpose = purpose; this.callback = callback; }
+        Consumer(ReadyCallback callback) { this.callback = callback; }
     }
 
     public synchronized void export(FileDownloadSource source, FileExport.Target target) {
@@ -221,13 +226,14 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     }
 
     /** Holds a file for a compound export until the caller releases its registration. */
-    public synchronized int whenReady(FileDownloadSource source, String purpose, ReadyCallback callback) {
+    public synchronized int whenReady(FileDownloadSource source, ReadyCallback callback) {
         Entry entry = entry(source);
-        Consumer consumer = new Consumer(purpose, callback);
+        Consumer consumer = new Consumer(callback);
         entry.consumers.put(consumer.id, consumer);
         entry.state.consumers = entry.consumers.size();
         entry.state.pause = State.Pause.NONE;
         entry.state.cancelled = false;
+        entry.failed = false;
         blockedFiles.remove(entry.fileName);
         cancelledFiles.remove(entry.fileName);
         if (entry.state.complete) notifyConsumers(entry); else load(entry);
@@ -282,7 +288,11 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     }
 
     public synchronized void beginIndependent(MessageObject message, TLRPC.Document document) {
-        Entry entry = entry(message, document);
+        beginIndependent(FileDownloadSource.document(message, document));
+    }
+
+    public synchronized void beginIndependent(FileDownloadSource source) {
+        Entry entry = entry(source);
         entry.state.independentDownload = true;
         entry.state.cancelled = false;
         entry.state.pause = State.Pause.NONE;
@@ -300,7 +310,13 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     public static boolean keepsFile(int account, TLRPC.Document document) {
         FileDownloadTasks tasks = instances[account];
         if (tasks == null || document == null) return false;
-        Entry entry = tasks.entries.get(FileLoader.getAttachFileName(document));
+        return keepsFile(account, FileLoader.getAttachFileName(document));
+    }
+
+    public static boolean keepsFile(int account, String fileName) {
+        FileDownloadTasks tasks = instances[account];
+        if (tasks == null || fileName == null) return false;
+        Entry entry = tasks.entries.get(fileName);
         return entry != null && entry.state.keepsTransfer();
     }
 
@@ -426,7 +442,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         if (entry == null) return;
         entry.viewerBackground = false;
         entry.viewerPlayback = false;
-        if (!entry.playbackOwners.isEmpty() || !entry.playbackSessions.isEmpty()) {
+        if (!entry.playbackOwners.isEmpty()) {
             if (entry.state.hasIndependentWork()) publish(entry, true); else hide(entry, true);
             return;
         }
@@ -529,7 +545,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         ArrayList<Consumer> consumers = new ArrayList<>(entry.consumers.values());
         entry.consumers.clear();
         entry.state.consumers = 0;
-        for (Export save : entry.saves.values()) save.cancelled.set(true);
+        ArrayList<Export> saves = new ArrayList<>(entry.saves.values());
         entry.saves.clear();
         if (entry.share != null) entry.share.cancelled.set(true);
         entry.share = null;
@@ -539,6 +555,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         entry.state.cancel();
         stopTransfer(entry);
         remove(entry);
+        for (Export save : saves) finishExport(save, false);
         for (Consumer consumer : consumers) AndroidUtilities.runOnUIThread(consumer.callback::onCancelled);
     }
 
@@ -577,7 +594,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     private synchronized void cancelExport(Entry entry, FileExport.Target target) {
         if (entry == null) return;
         Export export = entry.saves.remove(target);
-        if (export != null) export.cancelled.set(true);
+        if (export != null) finishExport(export, false);
         entry.state.save = !entry.saves.isEmpty();
         finishCancellation(entry);
     }
@@ -607,15 +624,56 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         startExport(FileDownloadSource.document(message, document), null);
     }
 
+    public synchronized void export(FileDownloadSource source, FileExport.Target target, FileExport.Callback callback) {
+        export(source, target, null, null, callback);
+    }
+
+    synchronized void export(FileDownloadSource source, FileExport.Target target, FileDownloadSource companion,
+                             FileExport.Composer composer, FileExport.Callback callback) {
+        if (target == null) throw new IllegalArgumentException("Missing export target");
+        startExport(source, target, companion, composer, callback);
+    }
+
     private synchronized void startExport(FileDownloadSource source, FileExport.Target target) {
+        startExport(source, target, null, null, null);
+    }
+
+    private synchronized void startExport(FileDownloadSource source, FileExport.Target target, FileDownloadSource companion,
+                                          FileExport.Composer composer, FileExport.Callback callback) {
         Entry entry = entry(source);
-        if (target == null ? entry.share != null : entry.saves.containsKey(target)) {
+        Export existing = target == null ? entry.share : entry.saves.get(target);
+        if (existing != null) {
+            if (callback != null) existing.callbacks.add(callback);
+            entry.state.addExport(target != null);
+            blockedFiles.remove(entry.fileName);
+            cancelledFiles.remove(entry.fileName);
+            entry.failed = false;
+            if (entry.state.complete) finishExports(entry); else load(entry);
             publish(entry, true);
             return;
         }
         Export export = new Export();
+        if (callback != null) export.callbacks.add(callback);
+        export.companion = companion;
+        export.composer = composer;
         if (target == null) entry.share = export; else entry.saves.put(target, export);
         entry.state.addExport(target != null);
+        if (companion != null) {
+            export.registration = whenReady(companion, new ReadyCallback() {
+                @Override public void onReady(File file) {
+                    synchronized (FileDownloadTasks.this) {
+                        if (entry.saves.get(target) != export) return;
+                        export.companionFile = file;
+                        if (entry.state.complete) finishExports(entry);
+                    }
+                }
+                @Override public void onCancelled() {
+                    synchronized (FileDownloadTasks.this) {
+                        if (entry.saves.get(target) == export) cancelExport(entry, target);
+                    }
+                }
+            });
+        }
         blockedFiles.remove(entry.fileName);
         cancelledFiles.remove(entry.fileName);
         entry.failed = false;
@@ -656,20 +714,12 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         return file;
     }
 
-    public ArrayList<TLRPC.Document> exportDocuments(MessageObject message, FileExport.Target target) {
-        return requestedDocuments(message, target, false);
-    }
-
-    public ArrayList<TLRPC.Document> shareDocuments(MessageObject message) {
-        return requestedDocuments(message, null, true);
-    }
-
-    private ArrayList<TLRPC.Document> requestedDocuments(MessageObject message, FileExport.Target target, boolean sharing) {
+    public synchronized ArrayList<TLRPC.Document> shareDocuments(MessageObject message) {
         ArrayList<TLRPC.Document> result = new ArrayList<>();
         if (message == null) return result;
         for (Entry entry : entries.values()) {
-            if (entry.message.getDialogId() == message.getDialogId() && entry.message.getId() == message.getId()
-                    && entry.document != null && (sharing ? entry.share != null : entry.saves.containsKey(target))) result.add(entry.document);
+            if (entry.message != null && entry.message.getDialogId() == message.getDialogId() && entry.message.getId() == message.getId()
+                    && entry.document != null && entry.share != null) result.add(entry.document);
         }
         return result;
     }
@@ -753,25 +803,46 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     private synchronized void finishExports(Entry entry) {
         for (FileExport.Target target : new ArrayList<>(entry.saves.keySet())) {
             Export save = entry.saves.get(target);
-            if (save == null || save.started || save.cancelled.get()) continue;
+            if (save == null || save.started || save.cancelled.get()
+                    || save.companion != null && save.companionFile == null) continue;
             save.started = true;
-            FileExport.save(entry.file, entry.source.displayName, entry.source.mime,
-                    target, save.cancelled, success -> {
+            save.failed = false;
+            FileExport.Callback callback = success -> {
                 synchronized (FileDownloadTasks.this) {
                 if (entry.saves.get(target) != save) return;
-                entry.failed = !success && !save.cancelled.get();
-                if (entry.failed) {
+                save.failed = !success && !save.cancelled.get();
+                if (save.failed) {
                     save.started = false;
+                    notifyExportCallbacks(save, false);
                     publish(entry, true);
                 } else {
                     entry.saves.remove(target);
+                    finishExport(save, success);
                     entry.state.save = !entry.saves.isEmpty();
                     if (!entry.state.hasWork()) remove(entry); else publish(entry, true);
                     if (success) savedNotification(entry, target);
                 }
                 }
-            });
+            };
+            if (save.composer == null) {
+                FileExport.save(entry.file, entry.source.displayName, entry.source.mime, target, save.cancelled, callback);
+            } else {
+                FileExport.save(entry.file, entry.source.displayName, entry.source.mime, target, save.cancelled,
+                        (stream, cancelled) -> save.composer.write(entry.file, save.companionFile, stream, cancelled), callback);
+            }
         }
+    }
+
+    private void finishExport(Export export, boolean success) {
+        if (!success) export.cancelled.set(true);
+        if (export.companion != null) release(export.companion, export.registration);
+        notifyExportCallbacks(export, success);
+    }
+
+    private void notifyExportCallbacks(Export export, boolean success) {
+        ArrayList<FileExport.Callback> callbacks = new ArrayList<>(export.callbacks);
+        export.callbacks.clear();
+        for (FileExport.Callback callback : callbacks) AndroidUtilities.runOnUIThread(() -> callback.done(success));
     }
 
     private synchronized void savedNotification(Entry entry, FileExport.Target target) {
@@ -841,25 +912,28 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         }
         if (!immediate && android.os.SystemClock.elapsedRealtime() - entry.lastNotification < 500) return;
         entry.lastNotification = android.os.SystemClock.elapsedRealtime();
+        boolean failed = entry.failed;
+        for (Export save : entry.saves.values()) failed |= save.failed;
         boolean shareReady = entry.state.complete && entry.share != null;
         boolean externalReady = entry.state.complete && entry.state.external && entry.saves.isEmpty()
-                && entry.consumers.isEmpty() && entry.share == null && !entry.failed;
-        if (entry.state.complete && entry.saves.isEmpty() && entry.consumers.isEmpty() && !shareReady && !entry.failed) {
+                && entry.consumers.isEmpty() && entry.share == null && !failed;
+        if (entry.state.complete && entry.saves.isEmpty() && entry.consumers.isEmpty() && !shareReady && !failed) {
             if (!entry.state.playback && !entry.state.external) { remove(entry); return; }
             if (!externalReady) { hide(entry, immediate); return; }
         }
         NotificationsController.checkOtherNotificationsChannel();
-        boolean downloading = !entry.state.complete && !entry.state.blocked() && !entry.failed;
+        int status = shareReady ? R.string.ReadyToShare : entry.failed ? R.string.DownloadFailed
+                : failed ? R.string.ErrorOccurred : entry.state.blocked() ? R.string.DownloadPaused
+                : entry.state.complete ? R.string.SavingContentTitle : R.string.Downloading;
+        boolean downloading = status == R.string.Downloading;
         if (downloading && !updatingSpeed) {
             updatingSpeed = true;
             AndroidUtilities.runOnUIThread(updateSpeed, 1000);
         }
         if (!downloading) entry.speed = 0;
-        String text = shareReady ? LocaleController.getString(R.string.ReadyToShare)
-                : entry.failed ? LocaleController.getString(R.string.DownloadFailed)
-                : externalReady ? downloadSize(entry) + " · " + LocaleController.getString(R.string.CacheComplete)
+        String text = externalReady ? downloadSize(entry) + " · " + LocaleController.getString(R.string.CacheComplete)
                 : entry.state.blocked() ? downloadProgress(entry, true)
-                : downloading ? downloadProgress(entry, false) : LocaleController.getString(R.string.SavingContentTitle);
+                : downloading ? downloadProgress(entry, false) : LocaleController.getString(status);
         String purposes = "";
         if (entry.state.playback) purposes = appendPurpose(purposes, LocaleController.getString(R.string.PlaybackCache));
         for (FileExport.Target target : entry.saves.keySet()) purposes = appendPurpose(purposes, target.label());
@@ -868,7 +942,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         NotificationCompat.Builder builder = taskNotification(entry.notification, entry.notificationTime, text)
                 .setOngoing(!shareReady).setAutoCancel(shareReady);
         if (!purposes.isEmpty() && !entry.failed) builder.setSubText(purposes);
-        if (!entry.state.complete && !entry.failed) {
+        if (!entry.state.complete && !failed) {
             builder.setProgress(100, (int) (entry.progress * 100), !entry.state.blocked() && entry.progress == 0);
         }
         builder.addAction(R.drawable.ic_close_white, LocaleController.getString(R.string.Cancel), control(entry, "cancel"));
@@ -920,6 +994,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
             entry.file = args.length > 1 && args[1] instanceof File ? (File) args[1] : entry.source.localFile(account);
             if (entry.file == null || !entry.file.isFile()) return;
             entry.state.complete = true;
+            entry.failed = false;
             entry.progress = 1;
             if (entry.totalBytes <= 0) entry.totalBytes = entry.file.length();
             entry.downloadedBytes = entry.totalBytes;
@@ -931,6 +1006,11 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         } else if (id == NotificationCenter.fileLoadFailed) {
             if (entry.state.blocked() || args.length > 1 && Integer.valueOf(1).equals(args[1])) return;
             entry.failed = true;
+            for (Export save : entry.saves.values()) notifyExportCallbacks(save, false);
+            ArrayList<Consumer> consumers = new ArrayList<>(entry.consumers.values());
+            entry.consumers.clear();
+            entry.state.consumers = 0;
+            for (Consumer consumer : consumers) AndroidUtilities.runOnUIThread(consumer.callback::onCancelled);
             publish(entry, true);
         } else {
             entry.downloadedBytes = Math.max(0, (Long) args[1]);

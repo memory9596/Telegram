@@ -332,7 +332,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 }
             }
         } else if (id == NotificationCenter.onDownloadingFilesChanged) {
-            if (currentMessageObject != null && currentMessageObject.isVideo()) updateButtonState(false, true, false);
+            if (currentMessageObject != null) updateButtonState(false, true, false);
         } else if (id == NotificationCenter.emojiLoaded) {
             invalidate();
         } else if (id == NotificationCenter.didUpdatePremiumGiftStickers) {
@@ -6238,7 +6238,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     FileLoader.getInstance(currentAccount).cancelLoadFile(document);
                 } else {
                     TLRPC.PhotoSize photo = FileLoader.getClosestPhotoSizeWithSize(messageObject.photoThumbs, AndroidUtilities.getPhotoSize());
-                    if (photo != null) {
+                    if (photo != null && !FileDownloadTasks.keepsFile(currentAccount, FileLoader.getAttachFileName(photo))) {
                         FileLoader.getInstance(currentAccount).cancelLoadFile(photo);
                     }
                 }
@@ -15147,6 +15147,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                         currentMessageObject.type == MessageObject.TYPE_ROUND_VIDEO
                     ) {
                         ImageLoader.getInstance().cancelForceLoadingForImageReceiver(photoImage);
+                        if (currentPhotoObject != null) FileLoader.getInstance(currentAccount).cancelLoadFileByUser(currentPhotoObject, currentMessageObject);
+                        if (documentAttach != null) FileLoader.getInstance(currentAccount).cancelLoadFileByUser(documentAttach, currentMessageObject);
                         photoImage.cancelLoadImage();
                     } else if (currentMessageObject.type == MessageObject.TYPE_FILE) {
                         FileLoader.getInstance(currentAccount).cancelLoadFileByUser(currentMessageObject.getDownloadDocument(), currentMessageObject);

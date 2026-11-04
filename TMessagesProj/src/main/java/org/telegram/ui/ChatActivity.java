@@ -163,6 +163,7 @@ import org.telegram.messenger.Emoji;
 import org.telegram.messenger.EmojiData;
 import org.telegram.messenger.FactCheckController;
 import org.telegram.messenger.FileLoader;
+import org.telegram.messenger.FileExport;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.FlagSecureReason;
 import org.telegram.messenger.HashtagSearchController;
@@ -3858,14 +3859,14 @@ public class ChatActivity extends BaseFragment implements
                     hideActionMode();
                     updatePinnedMessageView(true);
                     updateVisibleRows();
-                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, (count) -> {
+                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, FileExport.onSaved(ChatActivity.this, (chat, count) -> {
                         if (count > 0) {
-                            if (getParentActivity() == null) {
+                            if (chat.getParentActivity() == null) {
                                 return;
                             }
-                            BulletinFactory.of(ChatActivity.this).createDownloadBulletin(isMusic ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, themeDelegate).show();
+                            BulletinFactory.of(chat).createDownloadBulletin(isMusic ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, chat.themeDelegate).show();
                         }
-                    });
+                    }));
                 } else if (id == chat_enc_timer) {
                     if (getParentActivity() == null) {
                         return;
@@ -34442,54 +34443,9 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private void saveMessageToGallery(MessageObject messageObject) {
-        String path = messageObject.messageOwner.attachPath;
-        if (!TextUtils.isEmpty(path)) {
-            File temp = new File(path);
-            if (!temp.exists()) {
-                path = null;
-            }
-        }
-        if (TextUtils.isEmpty(path)) {
-            File f = FileLoader.getInstance(currentAccount).getPathToMessage(messageObject.messageOwner);
-            if (f != null && f.exists()) {
-                path = f.getPath();
-            }
-        }
-        if (TextUtils.isEmpty(path) && messageObject.cachedQuality != null && messageObject.cachedQuality.isCached()) {
-            File f = new File(messageObject.cachedQuality.uri.getPath());
-            if (f != null && f.exists()) {
-                path = f.getPath();
-            }
-        }
-        if (TextUtils.isEmpty(path) && messageObject.qualityToSave != null) {
-            File f = FileLoader.getInstance(currentAccount).getPathToAttach(messageObject.qualityToSave, null, false, true);
-            if (f != null && f.exists()) {
-                path = f.getPath();
-            }
-        }
-        if (TextUtils.isEmpty(path)) {
-            return;
-        }
-        if (messageObject.isLivePhoto()) {
-            final TLRPC.Document videoDoc = MessageObject.getMedia(messageObject.messageOwner) != null
-                    ? MessageObject.getMedia(messageObject.messageOwner).document
-                    : null;
-            String videoPath = null;
-            if (videoDoc != null) {
-                File videoFile = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, false);
-                if (videoFile == null || !videoFile.exists()) {
-                    videoFile = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, true);
-                }
-                if (videoFile != null && videoFile.exists()) {
-                    videoPath = videoFile.getPath();
-                }
-            }
-            if (!TextUtils.isEmpty(videoPath)) {
-                MediaController.saveFile(path, videoPath, getParentActivity(), null);
-                return;
-            }
-        }
-        MediaController.saveFile(path, getParentActivity(), messageObject.isVideo() ? 1 : 0, null, null);
+        ArrayList<MessageObject> messages = new ArrayList<>();
+        messages.add(messageObject);
+        MediaController.saveMessagesToGallery(messages, null);
     }
 
     private void processSelectedOption(int option) {
@@ -34737,37 +34693,6 @@ public class ChatActivity extends BaseFragment implements
                 break;
             }
             case OPTION_SAVE_TO_GALLERY2: {
-                String path = selectedObject.messageOwner.attachPath;
-                if (path != null && path.length() > 0) {
-                    File temp = new File(path);
-                    if (!temp.exists()) {
-                        path = null;
-                    }
-                }
-                if (TextUtils.isEmpty(path)) {
-                    File f = FileLoader.getInstance(currentAccount).getPathToMessage(selectedObject.messageOwner);
-                    if (f != null && f.exists()) {
-                        path = f.getPath();
-                    }
-                }
-                if (TextUtils.isEmpty(path)) {
-                    File f = FileLoader.getInstance(currentAccount).getPathToMessage(selectedObject.messageOwner, true, true);
-                    if (f != null && f.exists()) {
-                        path = f.getPath();
-                    }
-                }
-                if (TextUtils.isEmpty(path) && selectedObject.cachedQuality != null && selectedObject.cachedQuality.isCached()) {
-                    File f = new File(selectedObject.cachedQuality.uri.getPath());
-                    if (f != null && f.exists()) {
-                        path = f.getPath();
-                    }
-                }
-                if (TextUtils.isEmpty(path) && selectedObject.qualityToSave != null) {
-                    File f = FileLoader.getInstance(currentAccount).getPathToAttach(selectedObject.qualityToSave, null, false, true);
-                    if (f != null && f.exists()) {
-                        path = f.getPath();
-                    }
-                }
                 if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE) && getParentActivity().checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                     getParentActivity().requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 4);
                     selectedObject = null;
@@ -34775,31 +34700,14 @@ public class ChatActivity extends BaseFragment implements
                     selectedObjectToEditCaption = null;
                     return;
                 }
-                if (TextUtils.isEmpty(path)) {
-                    return;
-                }
-                if (selectedObject.isLivePhoto()) {
-                    final TLRPC.Document videoDoc = MessageObject.getMedia(selectedObject.messageOwner) != null
-                            ? MessageObject.getMedia(selectedObject.messageOwner).document
-                            : null;
-                    String videoPath = null;
-                    if (videoDoc != null) {
-                        File videoFile = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, false);
-                        if (videoFile == null || !videoFile.exists()) {
-                            videoFile = FileLoader.getInstance(currentAccount).getPathToAttach(videoDoc, true);
-                        }
-                        if (videoFile != null && videoFile.exists()) {
-                            videoPath = videoFile.getPath();
-                        }
+                final MessageObject message = selectedObject;
+                ArrayList<MessageObject> messages = new ArrayList<>();
+                messages.add(message);
+                MediaController.saveMessagesToGallery(messages, FileExport.onSaved(ChatActivity.this, (chat, count) -> {
+                    if (count > 0 && chat.getParentActivity() != null && chat.fragmentView != null) {
+                        BulletinFactory.createSaveToGalleryBulletin(chat, message.isVideo() && !message.isLivePhoto(), message.isLivePhoto(), chat.themeDelegate).show();
                     }
-                    if (!TextUtils.isEmpty(videoPath)) {
-                        MediaController.saveFile(path, videoPath, getParentActivity(), null);
-                        BulletinFactory.createSaveToGalleryBulletin(this, false, true, themeDelegate).show();
-                        break;
-                    }
-                }
-                MediaController.saveFile(path, getParentActivity(), 0, null, null);
-                BulletinFactory.createSaveToGalleryBulletin(this, selectedObject.isVideo() && !selectedObject.isLivePhoto(), selectedObject.isLivePhoto(), themeDelegate).show();
+                }));
                 break;
             }
             case OPTION_REPLY: {
@@ -34875,14 +34783,14 @@ public class ChatActivity extends BaseFragment implements
                     }
 
                     final boolean isMusicFinal = isMusic;
-                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, (count) -> {
-                        if (getParentActivity() == null || fragmentView == null) {
+                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, FileExport.onSaved(ChatActivity.this, (chat, count) -> {
+                        if (chat.getParentActivity() == null || chat.fragmentView == null) {
                             return;
                         }
                         if (count > 0) {
-                            BulletinFactory.of(this).createDownloadBulletin(isMusicFinal ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, themeDelegate).show();
+                            BulletinFactory.of(chat).createDownloadBulletin(isMusicFinal ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, chat.themeDelegate).show();
                         }
-                    });
+                    }));
                 } else if (isMusic || isDocument) {
                     ArrayList<MessageObject> messageObjects;
                     if (selectedObjectGroup != null) {
@@ -34892,74 +34800,38 @@ public class ChatActivity extends BaseFragment implements
                         messageObjects.add(selectedObject);
                     }
                     final boolean isMusicFinal = isMusic;
-                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, (count) -> {
-                        if (getParentActivity() == null || fragmentView == null) {
+                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, FileExport.onSaved(ChatActivity.this, (chat, count) -> {
+                        if (chat.getParentActivity() == null || chat.fragmentView == null) {
                             return;
                         }
                         if (count > 0) {
-                            BulletinFactory.of(this).createDownloadBulletin(isMusicFinal ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, themeDelegate).show();
+                            BulletinFactory.of(chat).createDownloadBulletin(isMusicFinal ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, chat.themeDelegate).show();
                         }
-                    });
+                    }));
                 } else if (selectedObject.isLivePhoto()) {
                     final ArrayList<MessageObject> messageObjects = new ArrayList<>();
                     messageObjects.add(selectedObject);
-                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, (count) -> {
-                        if (getParentActivity() == null || fragmentView == null) {
+                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messageObjects, FileExport.onSaved(ChatActivity.this, (chat, count) -> {
+                        if (chat.getParentActivity() == null || chat.fragmentView == null) {
                             return;
                         }
                         if (count > 0) {
-                            BulletinFactory.of(this).createDownloadBulletin(BulletinFactory.FileType.LIVEPHOTO, count, themeDelegate).show();
+                            BulletinFactory.of(chat).createDownloadBulletin(BulletinFactory.FileType.LIVEPHOTO, count, chat.themeDelegate).show();
                         }
-                    });
+                    }));
                 } else {
-                    boolean video = selectedObject.isVideo();
-                    boolean photo = selectedObject.isPhoto();
-                    boolean gif = selectedObject.isGif();
-                    String fileName = FileLoader.getDocumentFileName(selectedObject.getDocument());
-                    if (TextUtils.isEmpty(fileName)) {
-                        fileName = selectedObject.getFileName();
-                    }
-                    String path = selectedObject.messageOwner.attachPath;
-                    if (path != null && path.length() > 0) {
-                        File temp = new File(path);
-                        if (!temp.exists()) {
-                            path = null;
-                        }
-                    }
-                    if (TextUtils.isEmpty(path)) {
-                        File f = FileLoader.getInstance(currentAccount).getPathToMessage(selectedObject.messageOwner);
-                        if (f != null && f.exists()) {
-                            path = f.getPath();
-                        }
-                    }
-                    if (TextUtils.isEmpty(path) && selectedObject.cachedQuality != null && selectedObject.cachedQuality.isCached()) {
-                        File f = new File(selectedObject.cachedQuality.uri.getPath());
-                        if (f != null && f.exists()) {
-                            path = f.getPath();
-                        }
-                    }
-                    if (TextUtils.isEmpty(path) && selectedObject.qualityToSave != null) {
-                        File f = FileLoader.getInstance(currentAccount).getPathToAttach(selectedObject.qualityToSave, null, false, true);
-                        if (f != null && f.exists()) {
-                            path = f.getPath();
-                        }
-                    }
-                    MediaController.saveFile(path, getParentActivity(), 2, fileName, selectedObject.getDocument() != null ? selectedObject.getDocument().mime_type : "", uri -> {
-                        if (getParentActivity() == null) {
-                            return;
-                        }
-                        final BulletinFactory.FileType fileType;
-                        if (photo) {
-                            fileType = BulletinFactory.FileType.PHOTO_TO_DOWNLOADS;
-                        } else if (video) {
-                            fileType = BulletinFactory.FileType.VIDEO_TO_DOWNLOADS;
-                        } else if (gif) {
-                            fileType = BulletinFactory.FileType.GIF_TO_DOWNLOADS;
-                        } else {
-                            fileType = BulletinFactory.FileType.UNKNOWN;
-                        }
-                        BulletinFactory.of(this).createDownloadBulletin(fileType, themeDelegate).show();
-                    });
+                    final boolean video = selectedObject.isVideo();
+                    final boolean photo = selectedObject.isPhoto();
+                    final boolean gif = selectedObject.isGif();
+                    ArrayList<MessageObject> messages = new ArrayList<>();
+                    messages.add(selectedObject);
+                    MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), messages, FileExport.onSaved(ChatActivity.this, (chat, count) -> {
+                        if (count == 0 || chat.getParentActivity() == null || chat.fragmentView == null) return;
+                        final BulletinFactory.FileType fileType = photo ? BulletinFactory.FileType.PHOTO_TO_DOWNLOADS
+                                : video ? BulletinFactory.FileType.VIDEO_TO_DOWNLOADS
+                                : gif ? BulletinFactory.FileType.GIF_TO_DOWNLOADS : BulletinFactory.FileType.UNKNOWN;
+                        BulletinFactory.of(chat).createDownloadBulletin(fileType, chat.themeDelegate).show();
+                    }));
                 }
                 break;
             }
@@ -40759,13 +40631,13 @@ public class ChatActivity extends BaseFragment implements
 
             final ArrayList<MessageObject> documents = new ArrayList<>();
             documents.add(new MessageObject(currentAccount, message, false, true));
-            MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), documents, count -> {
-                if (count > 0 && getParentActivity() != null && fragmentView != null) {
-                    BulletinFactory.of(ChatActivity.this)
-                        .createDownloadBulletin(MessageObject.isMusicDocument(document) ? BulletinFactory.FileType.AUDIOS : BulletinFactory.FileType.UNKNOWNS, count, themeDelegate)
+            MediaController.saveFilesFromMessages(getParentActivity(), getAccountInstance(), documents, FileExport.onSaved(ChatActivity.this, (chat, count) -> {
+                if (count > 0 && chat.getParentActivity() != null && chat.fragmentView != null) {
+                    BulletinFactory.of(chat)
+                        .createDownloadBulletin(BulletinFactory.FileType.UNKNOWNS, count, chat.themeDelegate)
                         .show();
                 }
-            });
+            }));
         }
 
         @Override
