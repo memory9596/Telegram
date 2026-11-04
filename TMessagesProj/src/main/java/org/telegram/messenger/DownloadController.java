@@ -449,6 +449,7 @@ public class DownloadController extends BaseController implements NotificationCe
     }
 
     public void cleanup() {
+        getFileLoader().clearFileDownloadState();
         photoDownloadQueue.clear();
         audioDownloadQueue.clear();
         documentDownloadQueue.clear();
@@ -760,14 +761,7 @@ public class DownloadController extends BaseController implements NotificationCe
         } else {
             maxSize = preset.sizes[typeToIndex(type)];
         }
-        long size;
-        if (message.highestQuality != null) {
-            size = message.highestQuality.document.size;
-        } else if (message.thumbQuality != null) {
-            size = message.thumbQuality.document.size;
-        } else {
-            size = MessageObject.getMessageSize(msg);
-        }
+        long size = MessageObject.getMessageSize(msg);
         if (isVideo && preset.preloadVideo && size > maxSize && maxSize > 2 * 1024 * 1024) {
             return (mask & type) != 0 ? 2 : 0;
         } else {
@@ -1160,6 +1154,10 @@ public class DownloadController extends BaseController implements NotificationCe
             if (path == null || downloadQueueKeys.containsKey(path)) {
                 continue;
             }
+            if (getFileLoader().isFileDownloadBlocked(path)) {
+                getMessagesStorage().removeFromDownloadQueue(downloadObject.id, downloadObject.type, false);
+                continue;
+            }
             boolean added = true;
             if (photoSize != null) {
                 TLRPC.Photo photo = (TLRPC.Photo) downloadObject.object;
@@ -1207,7 +1205,7 @@ public class DownloadController extends BaseController implements NotificationCe
         if (downloadObject != null) {
             downloadQueueKeys.remove(fileName);
             downloadQueuePairs.remove(new Pair<>(downloadObject.id, downloadObject.type));
-            if (state == 0 || state == 2) {
+            if (state == 0 || state == 2 || state == 1 && getFileLoader().isFileDownloadBlocked(fileName)) {
                 getMessagesStorage().removeFromDownloadQueue(downloadObject.id, downloadObject.type, false /*state != 0*/);
             }
             if (downloadObject.type == AUTODOWNLOAD_TYPE_PHOTO) {
@@ -1443,8 +1441,9 @@ public class DownloadController extends BaseController implements NotificationCe
         if (parentObject == null) {
             return;
         }
-        TLRPC.Document parentDocument = parentObject.getDocument();
-        if (parentDocument == null) {
+        TLRPC.Document parentDocument = parentObject.getDownloadDocument();
+        if (parentDocument == null || parentObject.isVideo() && (document == null
+                || !FileLoader.getAttachFileName(document).equals(parentObject.getDownloadFileName()))) {
             return;
         }
         AndroidUtilities.runOnUIThread(() -> {
@@ -1458,7 +1457,7 @@ public class DownloadController extends BaseController implements NotificationCe
                 if (messageObject == null) {
                     continue;
                 }
-                TLRPC.Document document1 = messageObject.getDocument();
+                TLRPC.Document document1 = messageObject.getDownloadDocument();
                 if (document1 != null && document1.id == parentDocument.id) {
                     contains = true;
                     break;
@@ -1471,7 +1470,7 @@ public class DownloadController extends BaseController implements NotificationCe
                     if (messageObject == null) {
                         continue;
                     }
-                    TLRPC.Document document1 = messageObject.getDocument();
+                    TLRPC.Document document1 = messageObject.getDownloadDocument();
                     if (document1 != null && document1.id == parentDocument.id) {
                         contains = true;
                         break;
@@ -1487,8 +1486,8 @@ public class DownloadController extends BaseController implements NotificationCe
 
                         SQLitePreparedStatement state = getMessagesStorage().getDatabase().executeFast("REPLACE INTO downloading_documents VALUES(?, ?, ?, ?, ?)");
                         state.bindByteBuffer(1, data);
-                        state.bindInteger(2, parentObject.getDocument().dc_id);
-                        state.bindLong(3, parentObject.getDocument().id);
+                        state.bindInteger(2, parentObject.getDownloadDocument().dc_id);
+                        state.bindLong(3, parentObject.getDownloadDocument().id);
                         state.bindInteger(4, 0);
                         state.bindLong(5, System.currentTimeMillis());
 
@@ -1505,14 +1504,14 @@ public class DownloadController extends BaseController implements NotificationCe
     }
 
     public void onDownloadComplete(MessageObject parentObject) {
-        if (parentObject == null || parentObject.getDocument() == null) {
+        if (parentObject == null || parentObject.getDownloadDocument() == null) {
             return;
         }
-        TLRPC.Document document = parentObject.getDocument();
+        TLRPC.Document document = parentObject.getDownloadDocument();
         AndroidUtilities.runOnUIThread(() -> {
             boolean removed = false;
             for (int i = 0; i < downloadingFiles.size(); i++) {
-                if (downloadingFiles.get(i).getDocument() != null && downloadingFiles.get(i).getDocument().id == document.id) {
+                if (downloadingFiles.get(i).getDownloadDocument() != null && downloadingFiles.get(i).getDownloadDocument().id == document.id) {
                     downloadingFiles.remove(i);
                     removed = true;
                     break;
@@ -1522,7 +1521,7 @@ public class DownloadController extends BaseController implements NotificationCe
             if (removed) {
                 boolean contains = false;
                 for (int i = 0; i < recentDownloadingFiles.size(); i++) {
-                    if (recentDownloadingFiles.get(i).getDocument() != null && recentDownloadingFiles.get(i).getDocument().id == document.id) {
+                    if (recentDownloadingFiles.get(i).getDownloadDocument() != null && recentDownloadingFiles.get(i).getDownloadDocument().id == document.id) {
                         contains = true;
                         break;
                     }
@@ -1534,7 +1533,7 @@ public class DownloadController extends BaseController implements NotificationCe
                 getNotificationCenter().postNotificationName(NotificationCenter.onDownloadingFilesChanged);
                 getMessagesStorage().getStorageQueue().postRunnable(() -> {
                     try {
-                        String req = String.format(Locale.ENGLISH, "UPDATE downloading_documents SET state = 1, date = %d WHERE hash = %d AND id = %d", System.currentTimeMillis(), parentObject.getDocument().dc_id,  parentObject.getDocument().id);
+                        String req = String.format(Locale.ENGLISH, "UPDATE downloading_documents SET state = 1, date = %d WHERE hash = %d AND id = %d", System.currentTimeMillis(), parentObject.getDownloadDocument().dc_id,  parentObject.getDownloadDocument().id);
                         getMessagesStorage().getDatabase().executeFast(req).stepThis().dispose();
                         getMessagesStorage().getDatabase().executeFast("DELETE FROM downloading_documents WHERE state = 1 AND rowid NOT IN (SELECT rowid FROM downloading_documents WHERE state = 1 ORDER BY date DESC LIMIT 100)").stepThis().dispose();
                     } catch (Exception e) {
@@ -1554,9 +1553,9 @@ public class DownloadController extends BaseController implements NotificationCe
 
         AndroidUtilities.runOnUIThread(() -> {
             boolean removed = false;
-            TLRPC.Document parentDocument = parentObject.getDocument();
+            TLRPC.Document parentDocument = parentObject.getDownloadDocument();
             for (int i = 0; i < downloadingFiles.size(); i++) {
-                TLRPC.Document downloadingDocument = downloadingFiles.get(i).getDocument();
+                TLRPC.Document downloadingDocument = downloadingFiles.get(i).getDownloadDocument();
                 if (downloadingDocument == null || parentDocument != null && downloadingDocument.id == parentDocument.id) {
                     downloadingFiles.remove(i);
                     removed = true;
@@ -1576,8 +1575,8 @@ public class DownloadController extends BaseController implements NotificationCe
         getMessagesStorage().getStorageQueue().postRunnable(() -> {
             try {
                 SQLitePreparedStatement state = getMessagesStorage().getDatabase().executeFast("DELETE FROM downloading_documents WHERE hash = ? AND id = ?");
-                state.bindInteger(1, parentObject.getDocument().dc_id);
-                state.bindLong(2, parentObject.getDocument().id);
+                state.bindInteger(1, parentObject.getDownloadDocument().dc_id);
+                state.bindLong(2, parentObject.getDownloadDocument().id);
                 state.step();
                 state.dispose();
             } catch (Exception e) {
@@ -1673,8 +1672,8 @@ public class DownloadController extends BaseController implements NotificationCe
 
     public void updateFilesLoadingPriority() {
         for (int i = downloadingFiles.size() - 1; i >= 0 ; i--) {
-            if (getFileLoader().isLoadingFile(downloadingFiles.get(i).getFileName())) {
-                getFileLoader().loadFile(downloadingFiles.get(i).getDocument(), downloadingFiles.get(i), FileLoader.PRIORITY_NORMAL_UP, 0);
+            if (getFileLoader().isLoadingFile(downloadingFiles.get(i).getDownloadFileName())) {
+                getFileLoader().loadFile(downloadingFiles.get(i).getDownloadDocument(), downloadingFiles.get(i), FileLoader.PRIORITY_NORMAL_UP, 0);
             }
         }
     }
@@ -1712,8 +1711,8 @@ public class DownloadController extends BaseController implements NotificationCe
                 }
             }
             messageObjects.get(i).putInDownloadsStore = false;
-            FileLoader.getInstance(currentAccount).loadFile(messageObjects.get(i).getDocument(), messageObjects.get(i), FileLoader.PRIORITY_LOW, 0);
-            FileLoader.getInstance(currentAccount).cancelLoadFile(messageObjects.get(i).getDocument(), true);
+            FileLoader.getInstance(currentAccount).loadFile(messageObjects.get(i).getDownloadDocument(), messageObjects.get(i), FileLoader.PRIORITY_LOW, 0);
+            FileLoader.getInstance(currentAccount).cancelLoadFile(messageObjects.get(i).getDownloadDocument(), true);
         }
         getNotificationCenter().postNotificationName(NotificationCenter.onDownloadingFilesChanged);
         getMessagesStorage().getStorageQueue().postRunnable(() -> {
@@ -1721,8 +1720,8 @@ public class DownloadController extends BaseController implements NotificationCe
                 SQLitePreparedStatement state = getMessagesStorage().getDatabase().executeFast("DELETE FROM downloading_documents WHERE hash = ? AND id = ?");
                 for (int i = 0; i < messageObjects.size(); i++) {
                     state.requery();
-                    state.bindInteger(1, messageObjects.get(i).getDocument().dc_id);
-                    state.bindLong(2, messageObjects.get(i).getDocument().id);
+                    state.bindInteger(1, messageObjects.get(i).getDownloadDocument().dc_id);
+                    state.bindLong(2, messageObjects.get(i).getDownloadDocument().id);
                     state.step();
 
                     try {

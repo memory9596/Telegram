@@ -10520,6 +10520,25 @@ public class MessageObject {
         return getDocument(messageOwner);
     }
 
+    // Explicit downloads always refer to the uploaded document; playback may select a quality.
+    public TLRPC.Document getDownloadDocument() {
+        return isVideo() ? getDocumentFast() : getDocument();
+    }
+
+    public String getDownloadFileName() {
+        TLRPC.Document document = getDownloadDocument();
+        return document != null ? FileLoader.getAttachFileName(document) : getFileName();
+    }
+
+    public boolean downloadExists() {
+        if (isVideo() && hasVideoQualities()) {
+            FileLoader loader = FileLoader.getInstance(currentAccount);
+            return loader.getPathToAttach(getDownloadDocument()).exists()
+                    || loader.getPathToAttach(getDownloadDocument(), true).exists();
+        }
+        return mediaExists();
+    }
+
     public TLRPC.Document getDocumentFast() {
         if (emojiAnimatedSticker != null) {
             return emojiAnimatedSticker;

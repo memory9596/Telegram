@@ -6,4 +6,12 @@
     <string name="UserRestrictionsSendInline">机器人内容</string>
     <string name="Repeat">复读</string>
     <string name="QuickShare">快速转发</string>
+    <string name="PlaybackCache">播放缓存</string>
+    <string name="PlaybackCached">已缓存</string>
+    <string name="DownloadPaused">下载已暂停</string>
+    <string name="DownloadFailed">下载失败</string>
+    <string name="DownloadTimeLeft">剩余 %s</string>
+    <string name="CacheComplete">缓存完成</string>
+    <string name="ReadyToShare">可以分享了</string>
+    <string name="FileSaved">文件已保存</string>
 </resources>

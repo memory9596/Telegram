@@ -605,6 +605,7 @@
         <receiver android:name=".CustomTabsCopyReceiver" android:enabled="true"/>
 
         <receiver android:name=".NotificationDismissReceiver" android:exported="false"/>
+        <receiver android:name=".FileDownloadReceiver" android:exported="false"/>
 
         <receiver android:name=".voip.VoIPActionsReceiver" android:exported="false"/>
 

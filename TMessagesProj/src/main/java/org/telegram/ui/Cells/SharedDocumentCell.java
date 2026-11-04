@@ -393,7 +393,7 @@ public class SharedDocumentCell extends FrameLayout implements DownloadControlle
             downloadedSize = 0;
         }
 
-        TLRPC.Document document = messageObject.getDocument();
+        TLRPC.Document document = messageObject.getDownloadDocument();
         if (document != null) {
             int idx;
             String name = null;
@@ -500,15 +500,15 @@ public class SharedDocumentCell extends FrameLayout implements DownloadControlle
     }
 
     private void updateDateView() {
-        if (message == null || message.getDocument() == null) {
+        if (message == null || message.getDownloadDocument() == null) {
             return;
         }
         long date = (long) message.messageOwner.date * 1000;
         String fileSize = null;
         if (downloadedSize == 0) {
-            fileSize = AndroidUtilities.formatFileSize(message.getDocument().size);
+            fileSize = AndroidUtilities.formatFileSize(message.getDownloadDocument().size);
         } else {
-            fileSize = String.format(Locale.ENGLISH, "%s / %s", AndroidUtilities.formatFileSize(downloadedSize), AndroidUtilities.formatFileSize(message.getDocument().size));
+            fileSize = String.format(Locale.ENGLISH, "%s / %s", AndroidUtilities.formatFileSize(downloadedSize), AndroidUtilities.formatFileSize(message.getDownloadDocument().size));
         }
         if (viewType == VIEW_TYPE_GLOBAL_SEARCH) {
             CharSequence fromName = FilteredSearchView.createFromInfoString(message, true, 2, dateTextView.getPaint());
@@ -534,7 +534,7 @@ public class SharedDocumentCell extends FrameLayout implements DownloadControlle
         }
         if (message != null && message.messageOwner.media != null) {
             loaded = false;
-            if (message.attachPathExists || message.mediaExists || !drawDownloadIcon) {
+            if (message.attachPathExists || message.downloadExists() || !drawDownloadIcon) {
                 statusImageView.setVisibility(INVISIBLE);
                 progressView.setVisibility(INVISIBLE);
 
@@ -548,7 +548,7 @@ public class SharedDocumentCell extends FrameLayout implements DownloadControlle
                 loaded = true;
                 DownloadController.getInstance(currentAccount).removeLoadingFileObserver(this);
             } else {
-                String fileName = FileLoader.getAttachFileName(message.getDocument());
+                String fileName = FileLoader.getAttachFileName(message.getDownloadDocument());
                 DownloadController.getInstance(currentAccount).addLoadingFileObserver(fileName, message, this);
                 loading = FileLoader.getInstance(currentAccount).isLoadingFile(fileName);
                 statusImageView.setVisibility(VISIBLE);

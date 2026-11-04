@@ -7847,7 +7847,7 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
             } else if (selectedMode == TAB_FILES) {
                 if (view instanceof SharedDocumentCell) {
                     SharedDocumentCell cell = (SharedDocumentCell) view;
-                    TLRPC.Document document = message.getDocument();
+                    TLRPC.Document document = message.getDownloadDocument();
                     if (cell.isLoaded()) {
                         if (message.canPreviewDocument()) {
                             PhotoViewer.getInstance().setParentActivity(profileActivity);
@@ -7865,10 +7865,10 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
                     } else if (!cell.isLoading()) {
                         MessageObject messageObject = cell.getMessage();
                         messageObject.putInDownloadsStore = true;
-                        profileActivity.getFileLoader().loadFile(document, messageObject, FileLoader.PRIORITY_LOW, 0);
+                        profileActivity.getFileLoader().loadFileByUser(document, messageObject, FileLoader.PRIORITY_LOW, 0);
                         cell.updateFileExistIcon(true);
                     } else {
-                        profileActivity.getFileLoader().cancelLoadFile(document);
+                        profileActivity.getFileLoader().cancelLoadFileByUser(document, message);
                         cell.updateFileExistIcon(true);
                     }
                 }

@@ -24,6 +24,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -745,6 +746,11 @@ public class FileLoader extends BaseController {
         return fileName != null && loadOperationPathsUI.containsKey(fileName);
     }
 
+    long getDownloadSpeed(String fileName) {
+        FileLoadOperation operation = fileName == null ? null : loadOperationPaths.get(fileName);
+        return operation == null ? 0 : operation.getDownloadSpeed();
+    }
+
     public float getBufferedProgressFromPosition(final float position, final String fileName) {
         if (TextUtils.isEmpty(fileName)) {
             return 0;
@@ -791,6 +797,9 @@ public class FileLoader extends BaseController {
         if (imageLocation == null) {
             return;
         }
+        String taskFileName = imageLocation.document != null ? getAttachFileName(imageLocation.document)
+                : imageLocation.location != null ? getAttachFileName(imageLocation.location, ext) : null;
+        if (FileDownloadTasks.isBlocked(currentAccount, taskFileName)) return;
         if (cacheType == 0 && (imageLocation.isEncrypted() || imageLocation.photoSize != null && imageLocation.getSize() == 0)) {
             cacheType = 1;
         }
@@ -804,7 +813,67 @@ public class FileLoader extends BaseController {
         loadFile(null, secureDocument, null, null, null, null, null, 0, priority, 1);
     }
 
+    public void loadFileByUser(TLRPC.Document document, MessageObject message, int priority, int cacheType) {
+        if (message != null && message.isVideo()) document = message.getDownloadDocument();
+        if (document == null) return;
+        if (message != null && !message.isAnyKindOfSticker()) message.putInDownloadsStore = true;
+        if (message != null) FileDownloadTasks.getInstance(currentAccount).beginIndependent(message, document);
+        loadFile(document, message, priority, cacheType);
+    }
+
+    public void cancelLoadFileByUser(TLRPC.Document document, MessageObject message) {
+        if (message != null && (message.isVideo() || FileDownloadTasks.hasTask(currentAccount, getAttachFileName(document)))) {
+            message.loadingCancelled = true;
+            FileDownloadTasks.getInstance(currentAccount).cancel(message.isVideo() ? message.getDownloadDocument() : document);
+        } else cancelLoadFile(document);
+    }
+
+    public void cancelLoadFileByUser(TLRPC.PhotoSize photo, MessageObject message) {
+        String name = getAttachFileName(photo);
+        if (FileDownloadTasks.hasTask(currentAccount, name)) {
+            if (message != null) message.loadingCancelled = true;
+            FileDownloadTasks.getInstance(currentAccount).cancel(name);
+        } else cancelLoadFile(photo);
+    }
+
+    public boolean isFileDownloadBlocked(String fileName) {
+        return FileDownloadTasks.isBlocked(currentAccount, fileName);
+    }
+
+    public boolean isFileDownloadBlocked(MessageObject message) {
+        return message != null && isFileDownloadBlocked(message.getDownloadFileName());
+    }
+
+    void clearFileDownloadState() {
+        FileDownloadTasks.getInstance(currentAccount).clear();
+    }
+
+    public void stopVideoPlayback(MessageObject message) {
+        if (message == null || !message.isVideo()) {
+            return;
+        }
+        ArrayList<TLRPC.Document> documents = new ArrayList<>();
+        documents.add(message.getDownloadDocument());
+        TLRPC.MessageMedia media = MessageObject.getMedia(message);
+        if (media != null && media.alt_documents != null) {
+            documents.addAll(media.alt_documents);
+        }
+        // Release playback for every quality while retaining independent work on each file.
+        HashSet<String> handledFiles = new HashSet<>();
+        FileDownloadTasks tasks = FileDownloadTasks.getInstance(currentAccount);
+        for (TLRPC.Document document : documents) {
+            if (document != null && handledFiles.add(getAttachFileName(document))) {
+                tasks.releasePlayback(document);
+            }
+        }
+    }
+
+    private boolean isDownloadDocument(TLRPC.Document document, MessageObject message) {
+        return document != null && (!message.isVideo() || getAttachFileName(document).equals(message.getDownloadFileName()));
+    }
+
     public void loadFile(TLRPC.Document document, Object parentObject, int priority, int cacheType) {
+        if (FileDownloadTasks.isBlocked(currentAccount, document)) return;
         if (document == null) {
             return;
         }
@@ -820,6 +889,7 @@ public class FileLoader extends BaseController {
 
 
     private FileLoadOperation loadFileInternal(final TLRPC.Document document, final SecureDocument secureDocument, final WebFile webDocument, TLRPC.TL_fileLocationToBeDeprecated location, final ImageLocation imageLocation, Object parentObject, final String locationExt, final long locationSize, int priority, FileLoadOperationStream stream, final long streamOffset, boolean streamPriority, final int cacheType) {
+        if (FileDownloadTasks.isBlocked(currentAccount, document)) return null;
         String fileName;
         if (location != null) {
             fileName = getAttachFileName(location, locationExt);
@@ -843,10 +913,11 @@ public class FileLoader extends BaseController {
             loadOperationPathsUI.put(fileName, new LoadOperationUIObject());
         }
 
-        if (document != null && parentObject instanceof MessageObject && ((MessageObject) parentObject).putInDownloadsStore && !((MessageObject) parentObject).isAnyKindOfSticker()) {
+        if (document != null && parentObject instanceof MessageObject && ((MessageObject) parentObject).putInDownloadsStore && isDownloadDocument(document, (MessageObject) parentObject) && !((MessageObject) parentObject).isAnyKindOfSticker()) {
             getDownloadController().startDownloadFile(document, (MessageObject) parentObject);
         }
 
+        if (FileDownloadTasks.isBlocked(currentAccount, fileName)) return null;
         final String finalFileName = fileName;
         FileLoadOperation operation = loadOperationPaths.get(finalFileName);
 
@@ -1012,7 +1083,7 @@ public class FileLoader extends BaseController {
                 }
                 if (parentObject instanceof MessageObject) {
                     MessageObject messageObject = (MessageObject) parentObject;
-                    if (document != null && messageObject.putInDownloadsStore) {
+                    if (isDownloadDocument(document, messageObject) && messageObject.putInDownloadsStore) {
                         getDownloadController().onDownloadComplete(messageObject);
                     }
                 }
@@ -1035,7 +1106,7 @@ public class FileLoader extends BaseController {
                     delegate.fileDidFailedLoad(fileName, reason);
                 }
 
-                if (document != null && parentObject instanceof MessageObject && reason == 0) {
+                if (parentObject instanceof MessageObject && isDownloadDocument(document, (MessageObject) parentObject) && reason == 0) {
                     getDownloadController().onDownloadFail((MessageObject) parentObject, reason);
                 } else if (reason == -1) {
                     LaunchActivity.checkFreeDiscSpaceStatic(2);
@@ -1176,7 +1247,14 @@ public class FileLoader extends BaseController {
     private static final FileLoadOperationStream pendingPlayerStream = () -> {};
 
     public void startVideoStream(TLRPC.Document document, Object parentObject) {
-        fileLoaderQueue.postRunnable(() -> loadFileInternal(document, null, null, null, null, parentObject, null, 0, FileStreamLoadOperation.getStreamPrioriy(document), pendingPlayerStream, 0, false, 0));
+        if (parentObject instanceof MessageObject && ((MessageObject) parentObject).isVideo()) {
+            FileDownloadTasks.getInstance(currentAccount).beginPlayback((MessageObject) parentObject, document);
+        }
+        fileLoaderQueue.postRunnable(() -> {
+            if (!FileDownloadTasks.isBlocked(currentAccount, document)) {
+                loadFileInternal(document, null, null, null, null, parentObject, null, 0, FileStreamLoadOperation.getStreamPrioriy(document), pendingPlayerStream, 0, false, 0);
+            }
+        });
     }
 
     protected FileLoadOperation loadStreamFile(final FileLoadOperationStream stream, final TLRPC.Document document, final ImageLocation location, final Object parentObject, final long offset, final boolean priority, int loadingPriority) {
@@ -1187,8 +1265,13 @@ public class FileLoader extends BaseController {
         final CountDownLatch semaphore = new CountDownLatch(1);
         final FileLoadOperation[] result = new FileLoadOperation[1];
         fileLoaderQueue.postRunnable(() -> {
-            result[0] = loadFileInternal(document, null, null, document == null && location != null ? location.location : null, location, parentObject, document == null && location != null ? "mp4" : null, document == null && location != null ? location.currentSize : 0, loadingPriority, stream, offset, priority, cacheType);
-            semaphore.countDown();
+            try {
+                if (!FileDownloadTasks.isBlocked(currentAccount, document)) {
+                    result[0] = loadFileInternal(document, null, null, document == null && location != null ? location.location : null, location, parentObject, document == null && location != null ? "mp4" : null, document == null && location != null ? location.currentSize : 0, loadingPriority, stream, offset, priority, cacheType);
+                }
+            } finally {
+                semaphore.countDown();
+            }
         });
         awaitFileLoadOperation(semaphore, true);
         return result[0];

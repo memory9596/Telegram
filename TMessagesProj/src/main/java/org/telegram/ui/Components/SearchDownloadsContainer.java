@@ -136,7 +136,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
             if (view instanceof Cell) {
                 SharedDocumentCell cell = ((Cell) view).sharedDocumentCell;
                 MessageObject message = cell.getMessage();
-                TLRPC.Document document = message.getDocument();
+                TLRPC.Document document = message.getDownloadDocument();
                 if (cell.isLoaded()) {
                     if (message.isRoundVideo() || message.isVoice()) {
                         MediaController.getInstance().playMessage(message);
@@ -166,11 +166,11 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                     AndroidUtilities.openDocument(message, parentActivity, parentFragment);
                 } else if (!cell.isLoading()) {
                     messageObject.putInDownloadsStore = true;
-                    AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().loadFile(document, messageObject, FileLoader.PRIORITY_LOW, 0);
+                    FileLoader.getInstance(currentAccount).loadFileByUser(document, messageObject, FileLoader.PRIORITY_LOW, 0);
                     cell.updateFileExistIcon(true);
                     DownloadController.getInstance(currentAccount).updateFilesLoadingPriority();
                 } else {
-                    AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().cancelLoadFile(document);
+                    FileLoader.getInstance(currentAccount).cancelLoadFileByUser(document, message);
                     cell.updateFileExistIcon(true);
                 }
                 update(true);
@@ -326,7 +326,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                 ArrayList<MessageObject> currentLoadingFilesRes = new ArrayList<>();
                 ArrayList<MessageObject> recentLoadingFilesRes = new ArrayList<>();
                 for (int i = 0; i < currentLoadingFilesTmp.size(); i++) {
-                    final String filename = FileLoader.getDocumentFileName(currentLoadingFilesTmp.get(i).getDocument());
+                    final String filename = FileLoader.getDocumentFileName(currentLoadingFilesTmp.get(i).getDownloadDocument());
                     if (filename != null && filename.toLowerCase().contains(q)) {
                         final MessageObject messageObject = new MessageObject(currentAccount, currentLoadingFilesTmp.get(i).messageOwner, false, false);
                         messageObject.mediaExists = currentLoadingFilesTmp.get(i).mediaExists;
@@ -336,7 +336,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                 }
 
                 for (int i = 0; i < recentLoadingFilesTmp.size(); i++) {
-                    final String documentName = FileLoader.getDocumentFileName(recentLoadingFilesTmp.get(i).getDocument());
+                    final String documentName = FileLoader.getDocumentFileName(recentLoadingFilesTmp.get(i).getDownloadDocument());
                     if (documentName != null && documentName.toLowerCase().contains(q)) {
                         final MessageObject messageObject = new MessageObject(currentAccount, recentLoadingFilesTmp.get(i).messageOwner, false, false);
                         messageObject.mediaExists = recentLoadingFilesTmp.get(i).mediaExists;
@@ -426,8 +426,8 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                     } else if (newItemPosition >= recentFilesStartRow && newItemPosition < recentFilesEndRow) {
                         newItem = recentLoadingFiles.get(newItemPosition - recentFilesStartRow);
                     }
-                    if (newItem != null && oldItem != null && newItem.getDocument() != null && oldItem.getDocument() != null) {
-                        return newItem.getDocument().id == oldItem.getDocument().id;
+                    if (newItem != null && oldItem != null && newItem.getDownloadDocument() != null && oldItem.getDownloadDocument() != null) {
+                        return newItem.getDownloadDocument().id == oldItem.getDownloadDocument().id;
                     }
                     return false;
                 }
@@ -492,7 +492,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
             downloadingFilesEndRow = rowCount;
 
             for (int i = 0; i < currentLoadingFiles.size(); i++) {
-                if (FileLoader.getInstance(currentAccount).isLoadingFile(currentLoadingFiles.get(i).getFileName())) {
+                if (FileLoader.getInstance(currentAccount).isLoadingFile(currentLoadingFiles.get(i).getDownloadFileName())) {
                     hasCurrentDownload = true;
                     break;
                 }
@@ -553,9 +553,9 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                                 for (int i = 0; i < currentLoadingFiles.size(); i++) {
                                     MessageObject messageObject = currentLoadingFiles.get(i);
                                     if (hasCurrentDownload) {
-                                        AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().cancelLoadFile(messageObject.getDocument());
+                                        FileLoader.getInstance(currentAccount).cancelLoadFileByUser(messageObject.getDownloadDocument(), messageObject);
                                     } else {
-                                        AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().loadFile(messageObject.getDocument(), messageObject, FileLoader.PRIORITY_LOW, 0);
+                                        FileLoader.getInstance(currentAccount).loadFileByUser(messageObject.getDownloadDocument(), messageObject, FileLoader.PRIORITY_LOW, 0);
                                         DownloadController.getInstance(currentAccount).updateFilesLoadingPriority();
                                     }
                                 }
@@ -766,10 +766,10 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                 if (!(child instanceof Cell)) continue;
                 MessageObject messageObject = ((Cell) child).sharedDocumentCell.getMessage();
                 if (messageObject == null) continue;
-                if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getFileName())) {
+                if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getDownloadFileName())) {
                     showPremiumFloodWaitBulletin(false);
                     return;
-                } else if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getFileName())) {
+                } else if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getDownloadFileName())) {
                     showPremiumFloodWaitBulletin(true);
                     return;
                 }
