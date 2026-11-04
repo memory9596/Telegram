@@ -13,15 +13,33 @@ public final class FileDownloadSource {
     public final String fileName;
     public final String displayName;
     public final String mime;
+    private final File local;
 
     private FileDownloadSource(MessageObject message, TLRPC.Document document, TLRPC.Photo photo, TLRPC.PhotoSize size) {
         this.message = message;
         this.document = document;
+        local = null;
         photoSize = size;
         imageLocation = size == null ? null : ImageLocation.getForPhoto(size, photo);
         fileName = document != null ? FileLoader.getAttachFileName(document) : FileLoader.getAttachFileName(size);
         displayName = document != null ? FileLoader.getDocumentFileName(document) : fileName;
         mime = document != null ? document.mime_type : "image/jpeg";
+    }
+
+    private FileDownloadSource(File file, String mime) {
+        if (file == null || !file.isFile()) throw new IllegalArgumentException("Missing local source");
+        local = file;
+        message = null;
+        document = null;
+        photoSize = null;
+        imageLocation = null;
+        fileName = "local:" + file.getAbsolutePath();
+        displayName = file.getName();
+        this.mime = mime;
+    }
+
+    public static FileDownloadSource local(File file, String mime) {
+        return new FileDownloadSource(file, mime);
     }
 
     public static FileDownloadSource document(MessageObject message, TLRPC.Document document) {
@@ -35,7 +53,12 @@ public final class FileDownloadSource {
     }
 
     public File localFile(int account) {
+        if (local != null) return local.isFile() ? local : null;
         if (document != null) return FileDownloadTasks.localFile(account, document, message);
+        if (!message.isLivePhoto() && message.messageOwner.attachPath != null && !message.messageOwner.attachPath.isEmpty()) {
+            File file = new File(message.messageOwner.attachPath);
+            if (file.isFile()) return file;
+        }
         FileLoader loader = FileLoader.getInstance(account);
         File file = loader.getPathToAttach(photoSize, null, false, true);
         if (file != null && file.isFile()) return file;
@@ -44,10 +67,12 @@ public final class FileDownloadSource {
     }
 
     void load(int account) {
+        if (local != null) return;
         FileLoader.getInstance(account).loadFileForTask(this);
     }
 
     void cancel(int account) {
+        if (local != null) return;
         if (document != null) FileLoader.getInstance(account).cancelLoadFile(document);
         else FileLoader.getInstance(account).cancelLoadFile(photoSize);
     }
