@@ -35,6 +35,7 @@ public class AnimatedFileDrawableStream implements FileLoadOperationStream {
         preview = prev;
         this.loadingPriority = loadingPriority;
         loadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, location, parentObject, 0, preview, loadingPriority, cacheType);
+        if (loadOperation == null) canceled = true;
     }
 
     public boolean isFinishedLoadingFile() {
@@ -47,7 +48,7 @@ public class AnimatedFileDrawableStream implements FileLoadOperationStream {
 
     public int read(int offset, int readLength) {
         synchronized (sync) {
-            if (canceled) {
+            if (canceled || FileDownloadTasks.isBlocked(currentAccount, document)) {
                 debugCanceledCount++;
                 if (!debugReportSend && debugCanceledCount > 200) {
                     debugReportSend = true;
@@ -78,6 +79,7 @@ public class AnimatedFileDrawableStream implements FileLoadOperationStream {
                         countDownLatch = new CountDownLatch(1);
                         if (loadOperation.isPaused() || lastOffset != offset || preview) {
                             FileLoadOperation loadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, location, parentObject, offset, preview, loadingPriority);
+                            if (loadOperation == null) return 0;
                             if (this.loadOperation != loadOperation) {
                                 this.loadOperation.removeStreamListener(this);
                                 this.loadOperation = loadOperation;
@@ -139,7 +141,7 @@ public class AnimatedFileDrawableStream implements FileLoadOperationStream {
     }
 
     private void cancelLoadingInternal() {
-        FileLoader.getInstance(currentAccount).cancelLoadFile(document);
+        if (!FileDownloadTasks.keepsFile(currentAccount, document)) FileLoader.getInstance(currentAccount).cancelLoadFile(document);
         if (location != null) {
             FileLoader.getInstance(currentAccount).cancelLoadFile(location.location, "mp4");
         }

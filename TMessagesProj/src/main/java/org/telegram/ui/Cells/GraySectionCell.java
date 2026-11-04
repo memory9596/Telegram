@@ -11,10 +11,12 @@ package org.telegram.ui.Cells;
 import static org.telegram.messenger.AndroidUtilities.dp;
 
 import android.content.Context;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.core.view.ViewCompat;
@@ -37,6 +39,8 @@ public class GraySectionCell extends FrameLayout implements Theme.Colorable {
 
     private AnimatedEmojiSpan.TextViewEmojis textView;
     private AnimatedTextView rightTextView;
+    private AnimatedTextView additionalRightTextView;
+    private LinearLayout rightTextLayout;
     private FrameLayout.LayoutParams rightTextViewLayoutParams;
     private final Theme.ResourcesProvider resourcesProvider;
     private int layerHeight = 32;
@@ -62,20 +66,25 @@ public class GraySectionCell extends FrameLayout implements Theme.Colorable {
         textView.setGravity((LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT) | Gravity.CENTER_VERTICAL);
         addView(textView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, (LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT) | Gravity.TOP, padding, 0, padding, 0));
 
-        rightTextView = new AnimatedTextView(getContext(), true, true, true) {
+        rightTextView = createRightTextView();
+        addView(rightTextView, rightTextViewLayoutParams = LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.MATCH_PARENT, (LocaleController.isRTL ? Gravity.LEFT : Gravity.RIGHT) | Gravity.TOP, padding, 0, padding, 0));
+
+        ViewCompat.setAccessibilityHeading(this, true);
+    }
+
+    private AnimatedTextView createRightTextView() {
+        AnimatedTextView view = new AnimatedTextView(getContext(), true, true, true) {
             @Override
             public CharSequence getAccessibilityClassName() {
                 return Button.class.getName();
             }
         };
-        rightTextView.setPadding(dp(2), 0, dp(2), 0);
-        rightTextView.setAnimationProperties(.9f, 0, 420, CubicBezierInterpolator.EASE_OUT_QUINT);
-        rightTextView.setTextSize(dp(14));
-        ThemeBind.textColor(rightTextView, Theme.key_graySectionText, resourcesProvider);
-        rightTextView.setGravity(LocaleController.isRTL ? Gravity.LEFT : Gravity.RIGHT);
-        addView(rightTextView, rightTextViewLayoutParams = LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.MATCH_PARENT, (LocaleController.isRTL ? Gravity.LEFT : Gravity.RIGHT) | Gravity.TOP, padding, 0, padding, 0));
-
-        ViewCompat.setAccessibilityHeading(this, true);
+        view.setPadding(dp(2), 0, dp(2), 0);
+        view.setAnimationProperties(.9f, 0, 420, CubicBezierInterpolator.EASE_OUT_QUINT);
+        view.setTextSize(dp(14));
+        ThemeBind.textColor(view, Theme.key_graySectionText, resourcesProvider);
+        view.setGravity(LocaleController.isRTL ? Gravity.LEFT : Gravity.RIGHT);
+        return view;
     }
 
     private boolean noBackground;
@@ -88,6 +97,7 @@ public class GraySectionCell extends FrameLayout implements Theme.Colorable {
         setBackgroundColor(noBackground ? 0 : getThemedColor(Theme.key_graySection));
         textView.setTextColor(getThemedColor(Theme.key_graySectionText));
         rightTextView.setTextColor(getThemedColor(Theme.key_graySectionText));
+        if (additionalRightTextView != null) additionalRightTextView.setTextColor(getThemedColor(Theme.key_graySectionText));
     }
 
     @Override
@@ -95,6 +105,12 @@ public class GraySectionCell extends FrameLayout implements Theme.Colorable {
         super.onMeasure(
                 MeasureSpec.makeMeasureSpec(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(dp(layerHeight), MeasureSpec.EXACTLY));
+        if (additionalRightTextView != null && additionalRightTextView.getVisibility() == VISIBLE) {
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) textView.getLayoutParams();
+            int margin = LocaleController.isRTL ? params.rightMargin + rightTextViewLayoutParams.leftMargin : params.leftMargin + rightTextViewLayoutParams.rightMargin;
+            int width = Math.max(0, getMeasuredWidth() - margin - rightTextLayout.getMeasuredWidth() - dp(8));
+            textView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(dp(layerHeight), MeasureSpec.EXACTLY));
+        }
     }
 
     public void setLayerHeight(int dp){
@@ -105,6 +121,7 @@ public class GraySectionCell extends FrameLayout implements Theme.Colorable {
     public void setTextColor(int key) {
         ThemeBind.textColor(textView, key, resourcesProvider);
         ThemeBind.textColor(rightTextView, key, resourcesProvider);
+        if (additionalRightTextView != null) ThemeBind.textColor(additionalRightTextView, key, resourcesProvider);
     }
 
     public CharSequence getText() {
@@ -112,12 +129,14 @@ public class GraySectionCell extends FrameLayout implements Theme.Colorable {
     }
 
     public void setText(CharSequence text) {
+        setAdditionalRightText(null, null);
         textView.setText(text);
         rightTextView.setVisibility(GONE);
         rightTextView.setOnClickListener(null);
     }
 
     public void setText(CharSequence left, CharSequence right, OnClickListener onClickListener) {
+        setAdditionalRightText(null, null);
         textView.setText(left);
         rightTextView.setText(right, false);
         rightTextView.setOnClickListener(onClickListener);
@@ -131,7 +150,28 @@ public class GraySectionCell extends FrameLayout implements Theme.Colorable {
     public void setRightTextMargin(int marginDp) {
         rightTextViewLayoutParams.leftMargin = dp(marginDp);
         rightTextViewLayoutParams.rightMargin = dp(marginDp);
-        rightTextView.setLayoutParams(rightTextViewLayoutParams);
+        (rightTextLayout == null ? rightTextView : rightTextLayout).setLayoutParams(rightTextViewLayoutParams);
+    }
+
+    public void setAdditionalRightText(CharSequence text, OnClickListener onClickListener) {
+        boolean visible = !TextUtils.isEmpty(text);
+        if (additionalRightTextView == null) {
+            if (!visible) return;
+            rightTextLayout = new LinearLayout(getContext());
+            rightTextLayout.setLayoutDirection(LocaleController.isRTL ? LAYOUT_DIRECTION_RTL : LAYOUT_DIRECTION_LTR);
+            removeView(rightTextView);
+            rightTextLayout.addView(rightTextView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.MATCH_PARENT));
+            additionalRightTextView = createRightTextView();
+            LinearLayout.LayoutParams params = LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.MATCH_PARENT);
+            params.setMarginStart(dp(12));
+            rightTextLayout.addView(additionalRightTextView, params);
+            addView(rightTextLayout, rightTextViewLayoutParams);
+        }
+        textView.setSingleLine(visible);
+        textView.setEllipsize(visible ? TextUtils.TruncateAt.END : null);
+        additionalRightTextView.setText(text, false);
+        additionalRightTextView.setOnClickListener(visible ? onClickListener : null);
+        additionalRightTextView.setVisibility(visible ? VISIBLE : GONE);
     }
 
     public void setRightText(CharSequence right, boolean moveDown) {

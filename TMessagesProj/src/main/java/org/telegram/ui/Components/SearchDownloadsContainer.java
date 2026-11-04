@@ -22,6 +22,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.DownloadController;
+import org.telegram.messenger.FileDownloadTasks;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
@@ -137,7 +138,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
             if (view instanceof Cell) {
                 SharedDocumentCell cell = ((Cell) view).sharedDocumentCell;
                 MessageObject message = cell.getMessage();
-                TLRPC.Document document = message.getDocument();
+                TLRPC.Document document = message.getDownloadDocument();
                 if (cell.isLoaded()) {
                     if (message.isRoundVideo() || message.isVoice()) {
                         MediaController.getInstance().playMessage(message);
@@ -165,13 +166,13 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                         return;
                     }
                     AndroidUtilities.openDocument(message, parentActivity, parentFragment);
-                } else if (!cell.isLoading()) {
+                } else if (!cell.isLoading() || FileDownloadTasks.getInstance(currentAccount).isUserPaused(document)) {
                     messageObject.putInDownloadsStore = true;
-                    AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().loadFile(document, messageObject, FileLoader.PRIORITY_LOW, 0);
+                    FileLoader.getInstance(currentAccount).loadFileByUser(document, messageObject, FileLoader.PRIORITY_LOW, 0);
                     cell.updateFileExistIcon(true);
                     DownloadController.getInstance(currentAccount).updateFilesLoadingPriority();
                 } else {
-                    AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().cancelLoadFile(document);
+                    FileLoader.getInstance(currentAccount).cancelLoadFileByUser(document, message);
                     cell.updateFileExistIcon(true);
                 }
                 update(true);
@@ -274,7 +275,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                     DownloadController.getInstance(currentAccount).onDownloadComplete(moveToRecent.get(i));
                 }
                 if (!removeFromRecent.isEmpty()) {
-                    DownloadController.getInstance(currentAccount).deleteRecentFiles(removeFromRecent);
+                    DownloadController.getInstance(currentAccount).removeDownloadTasks(removeFromRecent);
                 }
                 checkingFilesExist = false;
                 update(true);
@@ -327,7 +328,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                 ArrayList<MessageObject> currentLoadingFilesRes = new ArrayList<>();
                 ArrayList<MessageObject> recentLoadingFilesRes = new ArrayList<>();
                 for (int i = 0; i < currentLoadingFilesTmp.size(); i++) {
-                    final String filename = FileLoader.getDocumentFileName(currentLoadingFilesTmp.get(i).getDocument());
+                    final String filename = FileLoader.getDocumentFileName(currentLoadingFilesTmp.get(i).getDownloadDocument());
                     if (filename != null && filename.toLowerCase().contains(q)) {
                         final MessageObject messageObject = new MessageObject(currentAccount, currentLoadingFilesTmp.get(i).messageOwner, false, false);
                         messageObject.mediaExists = currentLoadingFilesTmp.get(i).mediaExists;
@@ -337,7 +338,7 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                 }
 
                 for (int i = 0; i < recentLoadingFilesTmp.size(); i++) {
-                    final String documentName = FileLoader.getDocumentFileName(recentLoadingFilesTmp.get(i).getDocument());
+                    final String documentName = FileLoader.getDocumentFileName(recentLoadingFilesTmp.get(i).getDownloadDocument());
                     if (documentName != null && documentName.toLowerCase().contains(q)) {
                         final MessageObject messageObject = new MessageObject(currentAccount, recentLoadingFilesTmp.get(i).messageOwner, false, false);
                         messageObject.mediaExists = recentLoadingFilesTmp.get(i).mediaExists;
@@ -427,8 +428,8 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                     } else if (newItemPosition >= recentFilesStartRow && newItemPosition < recentFilesEndRow) {
                         newItem = recentLoadingFiles.get(newItemPosition - recentFilesStartRow);
                     }
-                    if (newItem != null && oldItem != null && newItem.getDocument() != null && oldItem.getDocument() != null) {
-                        return newItem.getDocument().id == oldItem.getDocument().id;
+                    if (newItem != null && oldItem != null && newItem.getDownloadDocument() != null && oldItem.getDownloadDocument() != null) {
+                        return newItem.getDownloadDocument().id == oldItem.getDownloadDocument().id;
                     }
                     return false;
                 }
@@ -492,8 +493,12 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
             rowCount += currentLoadingFiles.size();
             downloadingFilesEndRow = rowCount;
 
+            FileDownloadTasks tasks = FileDownloadTasks.getInstance(currentAccount);
             for (int i = 0; i < currentLoadingFiles.size(); i++) {
-                if (FileLoader.getInstance(currentAccount).isLoadingFile(currentLoadingFiles.get(i).getFileName())) {
+                MessageObject message = currentLoadingFiles.get(i);
+                TLRPC.Document document = message.getDownloadDocument();
+                if (tasks.isIndependentActive(document) || !tasks.isUserPaused(document)
+                        && FileLoader.getInstance(currentAccount).isLoadingFile(message.getDownloadFileName())) {
                     hasCurrentDownload = true;
                     break;
                 }
@@ -554,9 +559,9 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                                 for (int i = 0; i < currentLoadingFiles.size(); i++) {
                                     MessageObject messageObject = currentLoadingFiles.get(i);
                                     if (hasCurrentDownload) {
-                                        AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().cancelLoadFile(messageObject.getDocument());
+                                        FileLoader.getInstance(currentAccount).cancelLoadFileByUser(messageObject.getDownloadDocument(), messageObject);
                                     } else {
-                                        AccountInstance.getInstance(UserConfig.selectedAccount).getFileLoader().loadFile(messageObject.getDocument(), messageObject, FileLoader.PRIORITY_LOW, 0);
+                                        FileLoader.getInstance(currentAccount).loadFileByUser(messageObject.getDownloadDocument(), messageObject, FileLoader.PRIORITY_LOW, 0);
                                         DownloadController.getInstance(currentAccount).updateFilesLoadingPriority();
                                     }
                                 }
@@ -564,6 +569,16 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                             }
                         });
                     }
+                    graySectionCell.setAdditionalRightText(LocaleController.getString(R.string.CancelAll), view -> {
+                        ArrayList<MessageObject> downloads = new ArrayList<>(currentLoadingFiles);
+                        for (MessageObject message : downloads) {
+                            messageHashIdTmp.set(message.getId(), message.getDialogId());
+                            if (uiCallback != null && uiCallback.isSelected(messageHashIdTmp)) {
+                                uiCallback.toggleItemSelection(message, null, 0);
+                            }
+                        }
+                        DownloadController.getInstance(currentAccount).cancelDownloadingFiles(downloads);
+                    });
                 } else if (position == recentFilesHeader) {
                     graySectionCell.setText(LocaleController.getString(R.string.RecentlyDownloaded), LocaleController.getString(R.string.Settings),
                             view -> DownloadsInfoBottomSheet.show(parentActivity, parentFragment)
@@ -767,10 +782,10 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                 if (!(child instanceof Cell)) continue;
                 MessageObject messageObject = ((Cell) child).sharedDocumentCell.getMessage();
                 if (messageObject == null) continue;
-                if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getFileName())) {
+                if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getDownloadFileName())) {
                     showPremiumFloodWaitBulletin(false);
                     return;
-                } else if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getFileName())) {
+                } else if (FileLoader.getInstance(currentAccount).checkLoadCaughtPremiumFloodWait(messageObject.getDownloadFileName())) {
                     showPremiumFloodWaitBulletin(true);
                     return;
                 }
