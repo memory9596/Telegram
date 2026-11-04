@@ -612,6 +612,10 @@
         <receiver android:name=".CustomTabsCopyReceiver" android:enabled="true"/>
 
         <receiver android:name=".NotificationDismissReceiver" android:exported="false"/>
+        <provider android:name=".VideoStreamingProvider"
+            android:authorities="${applicationId}.video_streaming"
+            android:exported="false" android:grantUriPermissions="true" />
+
         <receiver android:name=".FileDownloadReceiver" android:exported="false"/>
 
         <receiver android:name=".voip.VoIPActionsReceiver" android:exported="false"/>

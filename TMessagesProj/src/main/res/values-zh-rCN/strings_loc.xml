@@ -18,4 +18,5 @@
     <string name="RemoveDownloadTasksTitle_one">移除 %d 个下载任务</string>
     <string name="RemoveDownloadTasksTitle_other">移除 %d 个下载任务</string>
     <string name="RemoveDownloadTasksMessage">取消未完成的任务，并从下载列表中移除所选记录。已下载和已保存的文件会保留。</string>
+    <string name="Current">当前</string>
 </resources>

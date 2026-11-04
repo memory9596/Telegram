@@ -5643,7 +5643,7 @@ public class AndroidUtilities {
 
     @RequiresApi(api = Build.VERSION_CODES.O)
     public static boolean isInPictureInPictureMode(Activity activity) {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity.isInPictureInPictureMode();
+        return activity != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity.isInPictureInPictureMode();
     }
 
     @RequiresApi(api = Build.VERSION_CODES.O)
