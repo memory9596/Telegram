@@ -86,6 +86,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
     @Override
     public long open(DataSpec dataSpec) throws IOException {
         uri = dataSpec.uri;
+        this.dataSpec = dataSpec;
         transferInitializing(dataSpec);
         currentAccount = Utilities.parseInt(uri.getQueryParameter("account"));
         parentObject = FileLoader.getInstance(currentAccount).getParentObject(Utilities.parseInt(uri.getQueryParameter("rid")));
@@ -249,6 +250,19 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
     }
 
     @Override
+    public long getStreamStartOffset() {
+        DataSpec spec = dataSpec;
+        return spec == null ? 0 : spec.position;
+    }
+
+    @Override
+    public long getStreamEndOffset() {
+        DataSpec spec = dataSpec;
+        return spec == null ? 0 : spec.length == C.LENGTH_UNSET ? Long.MAX_VALUE
+                : spec.position + Math.min(spec.length, Long.MAX_VALUE - spec.position);
+    }
+
+    @Override
     public void close() {
         FileLog.e("FileStreamLoadOperation " + (document == null ? 0 : document.id) + " close me=" + this);
         if (loadOperation != null) {
@@ -273,6 +287,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
             countDownLatch.countDown();
             countDownLatch = null;
         }
+        dataSpec = null;
     }
 
     @Override
@@ -324,7 +339,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
     private final ArrayList<TransferListener> listeners;
 
     private int listenerCount;
-    @Nullable private DataSpec dataSpec;
+    @Nullable private volatile DataSpec dataSpec;
 
     @Override
     public final void addTransferListener(TransferListener transferListener) {

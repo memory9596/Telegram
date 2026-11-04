@@ -113,6 +113,10 @@ public class FileLoaderPriorityQueue {
                 }
                 continue;
             }
+            if (operation.waitingForStream) {
+                max++;
+                continue;
+            }
             if (i > 0 && !pauseAllNextOperations) {
                 if (type == TYPE_LARGE) {
                     if (prevOperation != null && prevOperation.isStory && prevOperation.getPriority() >= PRIORITY_VALUE_MAX && operation.getPriority() <= PRIORITY_VALUE_LOW) {

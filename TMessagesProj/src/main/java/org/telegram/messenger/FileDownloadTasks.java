@@ -304,6 +304,12 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         return entry != null && entry.state.keepsTransfer();
     }
 
+    public static boolean isPlaybackOnly(int account, String fileName) {
+        FileDownloadTasks tasks = instances[account];
+        Entry entry = tasks == null || fileName == null ? null : tasks.entries.get(fileName);
+        return entry != null && entry.state.playback && (entry.state.blocked() || !entry.state.hasIndependentWork());
+    }
+
     static void onIndependentDownloadStarted(int account, String fileName) {
         FileDownloadTasks tasks = instances[account];
         if (tasks == null) return;
@@ -374,13 +380,11 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         }
     }
 
-    /** Each active HLS data source retains its file until that source closes. */
+    /** Each playback owner retains its file until that owner releases it. */
     public synchronized boolean acquirePlayback(MessageObject message, TLRPC.Document document, Object owner) {
         if (isCancelled(account, document)) return false;
         Entry previous = find(document);
         if (previous != null && (previous.state.cancelled || previous.state.pause == State.Pause.BACKGROUND)) return false;
-        // HLS closes and reopens sources between byte ranges. Releasing the last
-        // source is natural idleness, rather than an explicit cancellation.
         blockedFiles.remove(FileLoader.getAttachFileName(document));
         Entry entry = entry(message, document);
         entry.playbackOwners.add(owner);
@@ -417,17 +421,12 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
                 && entry.state.pause != State.Pause.USER;
     }
 
-    public synchronized float progress(TLRPC.Document document) {
-        Entry entry = find(document);
-        return entry == null ? 0 : entry.progress;
-    }
-
     public synchronized void releasePlayback(TLRPC.Document document) {
         Entry entry = find(document);
         if (entry == null) return;
         entry.viewerBackground = false;
         entry.viewerPlayback = false;
-        if (!entry.playbackOwners.isEmpty()) {
+        if (!entry.playbackOwners.isEmpty() || !entry.playbackSessions.isEmpty()) {
             if (entry.state.hasIndependentWork()) publish(entry, true); else hide(entry, true);
             return;
         }
@@ -453,17 +452,6 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
             load(entry);
         }
         publish(entry, true);
-    }
-
-    public synchronized boolean isPaused(TLRPC.Document document) {
-        Entry entry = find(document);
-        return entry != null && entry.state.pause != State.Pause.NONE;
-    }
-
-    public synchronized boolean canControl(TLRPC.Document document) {
-        Entry entry = find(document);
-        return entry != null && !entry.state.complete && !entry.state.cancelled
-                && (entry.state.hasWork() || isPaused(document));
     }
 
     public synchronized void pause(TLRPC.Document document) { pause(find(document)); }
@@ -720,7 +708,8 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     private synchronized void load(Entry entry) {
         if (entry.state.complete || entry.state.blocked()) return;
         // Joining an active stream must not reset its seek/download offset to zero.
-        if (FileLoader.getInstance(account).isLoadingFile(entry.fileName)) return;
+        FileLoader loader = FileLoader.getInstance(account);
+        if (loader.isLoadingFile(entry.fileName) && !loader.isWaitingForStream(entry.fileName)) return;
         blockedFiles.remove(entry.fileName);
         entry.source.load(account);
     }

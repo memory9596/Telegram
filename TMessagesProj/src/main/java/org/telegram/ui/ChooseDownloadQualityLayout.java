@@ -7,23 +7,18 @@ import android.content.Context;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
-import android.text.TextUtils;
 import android.view.Gravity;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-
-import androidx.core.graphics.ColorUtils;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.R;
-import org.telegram.messenger.SharedConfig;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBarMenuItem;
 import org.telegram.ui.ActionBar.ActionBarMenuSubItem;
 import org.telegram.ui.ActionBar.ActionBarPopupWindow;
-import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.ColoredImageSpan;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.PopupSwipeBackLayout;
@@ -72,16 +67,28 @@ public class ChooseDownloadQualityLayout {
     }
 
     public boolean update(MessageObject messageObject) {
-        if (messageObject == null || messageObject.messageOwner == null || messageObject.messageOwner.media == null) return false;
-        if (!messageObject.hasVideoQualities()) return false;
+        return update(messageObject, null);
+    }
 
-        ArrayList<VideoPlayer.Quality> qualities = VideoPlayer.getQualities(messageObject.currentAccount, messageObject.messageOwner.media.document, messageObject.messageOwner.media.alt_documents, 0, false);
+    public boolean update(MessageObject messageObject, TLRPC.Document current) {
+        if (messageObject == null || messageObject.messageOwner == null || messageObject.messageOwner.media == null) return false;
+        if (!messageObject.isVideo()) return false;
+
+        TLRPC.MessageMedia media = MessageObject.getMedia(messageObject.messageOwner);
+        if (media == null) return false;
+        ArrayList<VideoPlayer.Quality> qualities = VideoPlayer.getQualities(messageObject.currentAccount, messageObject.getDownloadDocument(), media.alt_documents, 0, false);
 
         buttonsLayout.removeAllViews();
         for (int i = 0; i < qualities.size(); ++i) {
             final VideoPlayer.Quality q = qualities.get(i);
-            final VideoPlayer.VideoUri uri = q.getDownloadUri();
-            String title = LocaleController.formatString(R.string.QualitySaveIn, q.p()) + (q.original ? " (" + LocaleController.getString(R.string.QualitySource) + ")" : "");
+            VideoPlayer.VideoUri selected = q.getDownloadUri();
+            for (VideoPlayer.VideoUri candidate : q.uris) {
+                if (sameDocument(candidate.document, current)) { selected = candidate; break; }
+            }
+            final VideoPlayer.VideoUri uri = selected;
+            if (uri == null) continue;
+            String title = q.toString();
+            if (sameDocument(uri.document, current)) title += " · " + getString(R.string.Current);
             SpannableStringBuilder subtitle = new SpannableStringBuilder();
             if (uri.isCached()) {
                 subtitle.append(AndroidUtilities.formatFileSize(uri.document.size));
@@ -101,11 +108,16 @@ public class ChooseDownloadQualityLayout {
             item.setColors(0xfffafafa, 0xfffafafa);
             item.subtextView.setPadding(0, 0, 0, 0);
             item.setOnClickListener((view) -> {
-                callback.onQualitySelected(messageObject, q);
+                // Freeze the concrete codec/file even if another version completes later.
+                callback.onQualitySelected(messageObject, new VideoPlayer.Quality(uri));
             });
             item.setSelectorColor(0x0fffffff);
         }
-        return true;
+        return buttonsLayout.getChildCount() > 0;
+    }
+
+    private static boolean sameDocument(TLRPC.Document first, TLRPC.Document second) {
+        return first != null && second != null && first.id == second.id && first.dc_id == second.dc_id;
     }
 
     public interface Callback {
