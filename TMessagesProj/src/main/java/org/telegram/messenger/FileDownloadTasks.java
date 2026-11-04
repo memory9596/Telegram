@@ -437,7 +437,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         if (entry == null || !entry.playbackOwners.remove(owner)) return;
         PlaybackSession session = entry.playbackOwnerSessions.remove(owner);
         if (session != null) updatePlaybackProgress(session, entry);
-        if (!entry.viewerPlayback && entry.playbackOwners.isEmpty()) releasePlayback(document);
+        if (!entry.viewerPlayback && entry.playbackOwners.isEmpty() && entry.playbackSessions.isEmpty()) releasePlayback(document);
     }
 
     private static void updatePlaybackProgress(PlaybackSession session, Entry entry) {
@@ -476,7 +476,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         if (entry == null) return;
         entry.viewerBackground = false;
         entry.viewerPlayback = false;
-        if (!entry.playbackOwners.isEmpty()) {
+        if (!entry.playbackOwners.isEmpty() || !entry.playbackSessions.isEmpty()) {
             if (entry.state.hasIndependentWork()) publish(entry, true); else hide(entry, true);
             return;
         }
@@ -589,14 +589,16 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         session.cancelled |= cancel;
         NotificationManagerCompat.from(ApplicationLoader.applicationContext).cancel(NOTIFICATION_TAG, session.notification);
         for (Entry entry : new ArrayList<>(entries.values())) {
-            entry.playbackSessions.remove(session);
+            boolean heldSession = entry.playbackSessions.remove(session);
             for (Object owner : new ArrayList<>(entry.playbackOwnerSessions.keySet())) {
                 if (entry.playbackOwnerSessions.get(owner) != session) continue;
+                heldSession = true;
                 entry.playbackOwnerSessions.remove(owner, session);
                 if (cancel) entry.playbackOwners.remove(owner);
             }
-            if (!cancel) continue;
-            if (!entry.viewerPlayback && entry.playbackOwners.isEmpty()) {
+            if (!heldSession) continue;
+            if (cancel) entry.viewerPlayback = false;
+            if (!entry.viewerPlayback && entry.playbackOwners.isEmpty() && entry.playbackSessions.isEmpty()) {
                 entry.state.releasePlayback();
                 if (!entry.state.hasWork()) {
                     if (!entry.state.complete) stopTransfer(entry);

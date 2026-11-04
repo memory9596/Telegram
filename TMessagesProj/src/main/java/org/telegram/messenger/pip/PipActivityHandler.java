@@ -219,8 +219,12 @@ class PipActivityHandler implements IPipActivityHandler {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (pictureInPictureParams != null && hasContentForPictureInPictureMode()) {
-                dispatchStartEnterPip();
-                activity.enterPictureInPictureMode(pictureInPictureParams);
+                if (!AndroidUtilities.checkPipPermissions(activity)) return;
+                try {
+                    if (activity.enterPictureInPictureMode(pictureInPictureParams)) dispatchStartEnterPip();
+                } catch (RuntimeException e) {
+                    Log.w(PipUtils.TAG, "Unable to enter picture in picture", e);
+                }
             }
         }
     }

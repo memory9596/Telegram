@@ -81,6 +81,7 @@ import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.DispatchQueue;
 import org.telegram.messenger.FileLoader;
+import org.telegram.messenger.FileDownloadTasks;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.FourierTransform;
 import org.telegram.messenger.MessageObject;
@@ -156,6 +157,123 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     private DefaultBandwidthMeter bandwidthMeter;
     private MappingTrackSelector trackSelector;
     private ExtendedDefaultDataSourceFactory mediaDataSourceFactory;
+    private volatile MessageObject managedPlaybackMessage;
+    private volatile boolean managedPlaybackActive;
+    private volatile FileDownloadTasks.PlaybackSession managedPlaybackSession;
+    private final java.util.concurrent.ConcurrentHashMap<DataSource, TLRPC.Document> managedPlaybackStreams = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public void setManagedPlayback(MessageObject message) {
+        if (managedPlaybackMessage != message) releaseManagedPlaybackSession();
+        managedPlaybackMessage = message;
+        managedPlaybackActive = message != null;
+    }
+
+    public void setManagedPlaybackActive(boolean active) {
+        managedPlaybackActive = active && managedPlaybackMessage != null
+                && (managedPlaybackSession == null || !managedPlaybackSession.isCancelled());
+        if (managedPlaybackActive) updateManagedPlaybackSession(false);
+        if (managedPlaybackActive) allowManagedVariants(videoQualities);
+    }
+
+    public void restartManagedPlayback() {
+        managedPlaybackActive = managedPlaybackMessage != null;
+        if (managedPlaybackActive) {
+            updateManagedPlaybackSession(true);
+            allowManagedVariants(videoQualities);
+        }
+    }
+
+    private void updateManagedPlaybackSession(boolean restart) {
+        MessageObject message = managedPlaybackMessage;
+        boolean auto = message != null && selectedQualityIndex == QUALITY_AUTO;
+        FileDownloadTasks.PlaybackSession session = managedPlaybackSession;
+        if (auto && (session == null || restart && session.isCancelled())) {
+            managedPlaybackSession = FileDownloadTasks.getInstance(message.currentAccount).beginPlaybackSession(message);
+        } else if (!auto && session != null) {
+            releaseManagedPlaybackSession();
+        }
+    }
+
+    public void releaseManagedPlaybackSession() {
+        FileDownloadTasks.PlaybackSession session = managedPlaybackSession;
+        managedPlaybackSession = null;
+        MessageObject message = managedPlaybackMessage;
+        if (session != null && message != null) {
+            FileDownloadTasks.getInstance(message.currentAccount).releasePlaybackSession(session);
+        }
+    }
+
+    public boolean isManagedPlaybackCancelled() {
+        FileDownloadTasks.PlaybackSession session = managedPlaybackSession;
+        return session != null && session.isCancelled();
+    }
+
+    public ArrayList<TLRPC.Document> getManagedPlaybackDocuments() {
+        return new ArrayList<>(managedPlaybackStreams.values());
+    }
+
+    private void allowManagedVariants(ArrayList<Quality> qualities) {
+        MessageObject message = managedPlaybackMessage;
+        if (message == null || qualities == null) return;
+        FileDownloadTasks tasks = FileDownloadTasks.getInstance(message.currentAccount);
+        for (Quality q : qualities) for (VideoUri uri : q.uris) tasks.allowPlayback(uri.document);
+    }
+
+    /** Own the whole open/close lifecycle, including failed stream initialization. */
+    private DataSource createPlaybackDataSource() {
+        final DataSource upstream = mediaDataSourceFactory.createDataSource();
+        final MessageObject message = managedPlaybackMessage;
+        return new DataSource() {
+            private TLRPC.Document document;
+            private FileDownloadTasks.PlaybackSession playbackSession;
+            private boolean managed;
+
+            @Override public long open(DataSpec spec) throws IOException {
+                String scheme = spec.uri.getScheme();
+                managed = message != null && ("tg".equals(scheme) || "mtproto".equals(scheme));
+                if (managed) {
+                    if (!managedPlaybackActive || managedPlaybackMessage != message) throw new IOException("Playback stopped");
+                    playbackSession = managedPlaybackSession;
+                    if (playbackSession != null && playbackSession.isCancelled()) throw new IOException("Playback stopped");
+                    long id = "tg".equals(scheme) ? Utilities.parseLong(spec.uri.getQueryParameter("id"))
+                            : Utilities.parseLong(spec.uri.toString().substring("mtproto:".length()));
+                    if (videoQualities != null) for (Quality q : videoQualities) for (VideoUri uri : q.uris) {
+                        if (uri.docId == id) document = uri.document;
+                    }
+                    if (document != null) {
+                        if (!FileDownloadTasks.getInstance(message.currentAccount).acquirePlayback(message, document, this, playbackSession)) {
+                            document = null;
+                            throw new IOException("Playback download cancelled");
+                        }
+                        managedPlaybackStreams.put(this, document);
+                    }
+                }
+                try {
+                    if (managed && !managedPlaybackActive) throw new IOException("Playback stopped");
+                    return upstream.open(spec);
+                } catch (IOException | RuntimeException e) {
+                    try { close(); } catch (IOException closeError) { e.addSuppressed(closeError); }
+                    throw e;
+                }
+            }
+            @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+                if (managed && (!managedPlaybackActive || managedPlaybackMessage != message
+                        || playbackSession != null && playbackSession.isCancelled())) throw new IOException("Playback stopped");
+                return upstream.read(buffer, offset, length);
+            }
+            @Override public Uri getUri() { return upstream.getUri(); }
+            @Override public Map<String, List<String>> getResponseHeaders() { return upstream.getResponseHeaders(); }
+            @Override public void addTransferListener(TransferListener listener) { upstream.addTransferListener(listener); }
+            @Override public void close() throws IOException {
+                try { upstream.close(); } finally {
+                    TLRPC.Document held = managedPlaybackStreams.remove(this);
+                    document = null;
+                    playbackSession = null;
+                    if (held != null) FileDownloadTasks.getInstance(message.currentAccount).releasePlayback(held, this);
+                }
+            }
+        };
+    }
     private TextureView textureView;
     private SurfaceView surfaceView;
     private Surface surface;
@@ -177,7 +295,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     private int lastReportedPlaybackState;
     private boolean lastReportedPlayWhenReady;
 
-    private ArrayList<Quality> videoQualities;
+    private volatile ArrayList<Quality> videoQualities;
     private Quality videoQualityToSelect;
     private ArrayList<VideoUri> manifestUris;
     private Uri videoUri, audioUri;
@@ -346,23 +464,23 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         final MediaItem mediaItem = new MediaItem.Builder().setUri(uri).build();
         if (videoByteOffset != 0) {
             return new ProgressiveMediaSource.Factory(
-                () -> new OffsetDataSource(mediaDataSourceFactory.createDataSource(), videoByteOffset)
+                () -> new OffsetDataSource(createPlaybackDataSource(), videoByteOffset)
             ).createMediaSource(mediaItem);
         }
         switch (type) {
             case "dash":
                 if (dashMediaSourceFactory == null) {
-                    dashMediaSourceFactory = new DashMediaSource.Factory(mediaDataSourceFactory);
+                    dashMediaSourceFactory = new DashMediaSource.Factory(this::createPlaybackDataSource);
                 }
                 return dashMediaSourceFactory.createMediaSource(mediaItem);
             case "hls":
                 if (hlsMediaSourceFactory == null) {
-                    hlsMediaSourceFactory = new HlsMediaSource.Factory(mediaDataSourceFactory);
+                    hlsMediaSourceFactory = new HlsMediaSource.Factory(this::createPlaybackDataSource);
                 }
                 return hlsMediaSourceFactory.createMediaSource(mediaItem);
             default:
                 if (progressiveMediaSourceFactory == null) {
-                    progressiveMediaSourceFactory = new ProgressiveMediaSource.Factory(mediaDataSourceFactory);
+                    progressiveMediaSourceFactory = new ProgressiveMediaSource.Factory(this::createPlaybackDataSource);
                 }
                 return progressiveMediaSourceFactory.createMediaSource(mediaItem);
         }
@@ -395,6 +513,8 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void preparePlayer(ArrayList<Quality> qualities, Quality select) {
+        allowManagedVariants(qualities);
+        select = resolveQuality(qualities, select, allowAutoQuality);
         this.videoQualities = qualities;
         this.videoQualityToSelect = select;
         this.videoUri = null;
@@ -467,6 +587,26 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     public static final int QUALITY_AUTO = -1; // HLS
     private boolean autoIsOriginal = false;
+    private boolean allowAutoQuality = true;
+    private Utilities.Callback<Quality> onQualitySelectedListener;
+
+    public void setAllowAutoQuality(boolean allow) {
+        allowAutoQuality = allow;
+    }
+
+    public void setOnQualitySelectedListener(Utilities.Callback<Quality> listener) {
+        onQualitySelectedListener = listener;
+    }
+
+    public static Quality resolveQuality(ArrayList<Quality> qualities, Quality selected, boolean allowAuto) {
+        if (allowAuto || qualities == null || qualities.isEmpty()) return selected;
+        if (selected != null && qualities.contains(selected)) return selected;
+        for (Quality quality : qualities) {
+            if (quality.original && !quality.uris.isEmpty()) return quality;
+        }
+        // The original may have been excluded because this device cannot decode it.
+        return qualities.get(0);
+    }
     private int selectedQualityIndex = QUALITY_AUTO;
     private boolean currentStreamIsHls;
 
@@ -597,6 +737,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 if (player == null) return -1;
                 final Format format = player.getVideoFormat();
                 if (format == null) return -1;
+                for (int j = 0; j < getQualitiesCount(); j++) {
+                    for (VideoUri uri : getQuality(j).uris) if (uri.docId == format.documentId) return j;
+                }
                 for (int j = 0; j < getQualitiesCount(); ++j) {
                     final Quality q = getQuality(j);
                     if (!q.original && format.width == q.width && format.height == q.height && format.bitrate == (int) Math.floor(q.uris.get(0).bitrate * 8)) {
@@ -695,6 +838,9 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     public void setSelectedQuality(int index) {
         if (player == null) return;
+        if (!allowAutoQuality && (videoQualities == null || index < 0 || index >= videoQualities.size())) {
+            return;
+        }
         if (index != selectedQualityIndex) {
             selectedQualityIndex = index;
             Quality q = null;
@@ -715,10 +861,23 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
         boolean reset = false;
 
+        quality = resolveQuality(videoQualities, quality, allowAutoQuality);
+        if (!allowAutoQuality) {
+            if (quality == null) return;
+            selectedQualityIndex = videoQualities.indexOf(quality);
+        }
+        updateManagedPlaybackSession(false);
+        if (quality != null) {
+            // A download can finish while another quality is playing.
+            for (VideoUri videoUri : quality.uris) {
+                videoUri.updateCached(true);
+            }
+        }
         videoQualityToSelect = quality;
         if (quality == null) { // AUTO
             final Uri hlsManifest = makeManifest(videoQualities);
             final Quality original = getOriginalQuality();
+            if (original != null) for (VideoUri uri : original.uris) uri.updateCached(true);
             if (original != null && original.uris.size() == 1 && original.uris.get(0).isCached()) {
                 currentStreamIsHls = false;
                 autoIsOriginal = true;
@@ -748,7 +907,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             autoIsOriginal = false;
             if (quality.uris.isEmpty()) return;
             Uri hlsManifest = null;
-            if (quality.uris.size() > 1) {
+            if (allowAutoQuality && quality.uris.size() > 1) {
                 hlsManifest = makeManifest(videoQualities);
             }
             if (hlsManifest == null || quality.uris.size() == 1 || trackSelector.getCurrentMappedTrackInfo() == null) {
@@ -770,6 +929,8 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 trackSelector.setParameters(selector.build());
             }
         }
+
+        if (onQualitySelectedListener != null && quality != null) onQualitySelectedListener.run(quality);
 
         if (reset) {
             player.prepare();
@@ -1326,10 +1487,23 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void releasePlayer(boolean async) {
+        onQualityChangeListener = null;
+        managedPlaybackActive = false;
+        releaseManagedPlaybackSession();
+        MessageObject playbackMessage = managedPlaybackMessage;
+        managedPlaybackMessage = null;
+        onQualitySelectedListener = null;
         activePlayers.remove(playerId);
         if (player != null) {
             player.release();
             player = null;
+        }
+        if (playbackMessage != null) {
+            managedPlaybackStreams.forEach((source, document) -> {
+                if (managedPlaybackStreams.remove(source, document)) {
+                    FileDownloadTasks.getInstance(playbackMessage.currentAccount).releasePlayback(document, source);
+                }
+            });
         }
         if (audioPlayer != null) {
             audioPlayer.release();
@@ -1981,6 +2155,12 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     public void setIsStory() {
         isStory = true;
+    }
+
+    @Override
+    public void onVideoInputFormatChanged(AnalyticsListener.EventTime eventTime, Format format,
+            androidx.media3.exoplayer.DecoderReuseEvaluation decoderReuseEvaluation) {
+        if (onQualityChangeListener != null) AndroidUtilities.runOnUIThread(onQualityChangeListener);
     }
 
     @Override

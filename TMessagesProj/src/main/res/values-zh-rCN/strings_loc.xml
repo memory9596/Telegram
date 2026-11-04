@@ -14,4 +14,5 @@
     <string name="CacheComplete">缓存完成</string>
     <string name="ReadyToShare">可以分享了</string>
     <string name="FileSaved">文件已保存</string>
+    <string name="Current">当前</string>
 </resources>

@@ -6755,6 +6755,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == org.telegram.messenger.VideoStreamingProvider.REQUEST_CODE) {
+            org.telegram.messenger.VideoStreamingProvider.onActivityResult();
+            if (PhotoViewer.hasInstance()) PhotoViewer.getInstance().onExternalPlaybackFinished();
+        }
         if (GramWalletStorageAuth.onActivityResult(this, requestCode, resultCode)) return;
         if (requestCode == SCREEN_CAPTURE_REQUEST_CODE) {
             if (resultCode == Activity.RESULT_OK) {
@@ -6915,6 +6919,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         pipActivityHandler.onStop();
         Browser.unbindCustomTabsService(this);
         ApplicationLoader.mainInterfaceStopped = true;
+        if (PhotoViewer.hasInstance()) PhotoViewer.getInstance().onAppBackgrounded();
         GroupCallPip.updateVisibility(this);
         if (GroupCallActivity.groupCallInstance != null) {
             GroupCallActivity.groupCallInstance.onPause();
