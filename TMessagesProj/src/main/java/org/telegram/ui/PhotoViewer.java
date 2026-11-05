@@ -8513,16 +8513,17 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
     private void chooseQuality(int qualityIndex) {
         if (videoPlayer != null) {
-            if (isManagedVideo()) {
-                videoPlayer.restartManagedPlayback();
-                if (qualityIndex == VideoPlayer.QUALITY_AUTO) releasePlaybackDownload();
+            if (qualityIndex == VideoPlayer.QUALITY_AUTO) {
+                if (isManagedVideo()) releasePlaybackDownload();
+                videoPlayer.setAutoQuality(videoPlayer.getAutoQuality(currentMessageObject));
+            } else {
+                videoPlayer.setSelectedQuality(qualityIndex);
             }
             if (isManagedVideo() && qualityIndex >= 0 && qualityIndex < videoPlayer.getQualitiesCount()) {
                 externalPlaybackTransition = false;
                 TLRPC.Document document = videoPlayer.getQuality(qualityIndex).getDownloadDocument();
                 bindPlaybackDownload(document);
             }
-            videoPlayer.setSelectedQuality(qualityIndex);
             playerStoppedForDownload = false;
         }
         if (qualityIndex == VideoPlayer.QUALITY_AUTO) {
@@ -8581,17 +8582,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 if (i == -1) {
                     q = null;
                     title.append(LocaleController.getString(R.string.QualityAuto));
-                    if (i == videoPlayer.getSelectedQuality() && currentQuality != null) {
-                        q = currentQuality;
-                        title.append(" ");
-                        int start = title.length();
-                        if (SharedConfig.debugVideoQualities) {
-                            title.append(Integer.toString(q.width)).append("x").append(Integer.toString(q.height));
-                        } else {
-                            title.append(String.valueOf(q.p())).append("p");
-                        }
-                        title.setSpan(new ForegroundColorSpan(Theme.multAlpha(0xFFFFFFFF, .5f)), start, title.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                    }
                 } else {
                     q = videoPlayer.getQuality(i);
                     if (q.original) {
@@ -8625,7 +8615,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     }
                     title.setSpan(new ForegroundColorSpan(Theme.multAlpha(0xFFFFFFFF, .5f)), start, title.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 }
-                ActionBarMenuSubItem item = ActionBarMenuItem.addItem(videoQualityLayout, 0, title, true, null);
+                ActionBarMenuSubItem item = ActionBarMenuItem.addItem(videoQualityLayout, 0, title, true, new DarkThemeResourceProvider());
                 if (SharedConfig.debugVideoQualities && q != null) {
                     StringBuilder subtext = new StringBuilder();
                     for (VideoPlayer.VideoUri uri : q.uris) {
@@ -8662,17 +8652,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 if (i == -1) {
                     q = null;
                     title.append(LocaleController.getString(R.string.QualityAuto));
-                    if (i == videoPlayer.getSelectedQuality() && currentQuality != null) {
-                        q = currentQuality;
-                        title.append(" ");
-                        int start = title.length();
-                        if (SharedConfig.debugVideoQualities) {
-                            title.append(Integer.toString(q.width)).append("x").append(Integer.toString(q.height));
-                        } else {
-                            title.append(String.valueOf(q.p())).append("p");
-                        }
-                        title.setSpan(new ForegroundColorSpan(Theme.multAlpha(0xFFFFFFFF, .5f)), start, title.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                    }
                 } else {
                     q = videoPlayer.getQuality(i);
                     if (q.original) {
@@ -10538,7 +10517,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 };
                 player.setOnQualityChangeListener(() -> {
                     if (videoPlayer != player) return;
-                    if (isManagedVideo() && player.getSelectedQuality() != VideoPlayer.QUALITY_AUTO
+                    if (isManagedVideo() && !player.isAutoQualitySelected()
                             && !playerStoppedForDownload && !viewerInBackground && !externalPlaybackTransition) {
                         TLRPC.Document document = player.getCurrentDocument();
                         if (document != null) bindPlaybackDownload(document);
@@ -10750,13 +10729,17 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             videoPlayer.setAllowAutoQuality(true);
             videoPlayer.setManagedPlayback(isManagedVideo() ? currentMessageObject : null);
             videoPlayer.setOnQualitySelectedListener(quality -> {
-                if (videoPlayer.getSelectedQuality() != VideoPlayer.QUALITY_AUTO
+                if (!videoPlayer.isAutoQualitySelected()
                         && !playerStoppedForDownload && !viewerInBackground && !externalPlaybackTransition) {
                     bindPlaybackDownload(quality.getDownloadDocument());
                 }
             });
             if (videoUrises != null) {
-                videoPlayer.preparePlayer(videoUrises, VideoPlayer.getSavedQuality(videoUrises, currentMessageObject));
+                VideoPlayer.Quality savedQuality = videoUrises.size() > 1
+                        ? VideoPlayer.getSavedQuality(videoUrises, currentMessageObject) : null;
+                VideoPlayer.Quality initialQuality = isManagedVideo() && savedQuality == null
+                        ? VideoPlayer.getInitialQuality(videoUrises, currentMessageObject) : savedQuality;
+                videoPlayer.preparePlayer(videoUrises, initialQuality, isManagedVideo() && savedQuality == null);
             } else {
                 videoPlayer.preparePlayer(uri, "other", FileLoader.PRIORITY_HIGH, videoByteOffset);
             }
@@ -20795,10 +20778,15 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 final TLRPC.MessageMedia media = MessageObject.getMedia(currentMessageObject.messageOwner);
                 videoUrises = VideoPlayer.getQualities(currentAccount, currentMessageObject.getDownloadDocument(), media.alt_documents,
                         FileLoader.getInstance(currentAccount).getFileReference(currentMessageObject), false);
-                VideoPlayer.Quality selected = VideoPlayer.getSavedQuality(videoUrises, currentMessageObject);
-                TLRPC.Document document = selected == null ? currentMessageObject.getDownloadDocument() : selected.getDownloadDocument();
-                bindPlaybackDownload(document);
-                isStreaming = FileDownloadTasks.localFile(currentAccount, document, currentMessageObject) == null;
+                VideoPlayer.Quality selected = videoUrises.size() > 1
+                        ? VideoPlayer.getSavedQuality(videoUrises, currentMessageObject) : null;
+                VideoPlayer.Quality initial = selected == null
+                        ? VideoPlayer.getInitialQuality(videoUrises, currentMessageObject) : selected;
+                TLRPC.Document document = initial != null ? initial.getDownloadDocument() : null;
+                if (selected != null && document != null) {
+                    bindPlaybackDownload(document);
+                }
+                isStreaming = document == null || FileDownloadTasks.localFile(currentAccount, document, currentMessageObject) == null;
             }
             preparePlayer(videoUrises, uri, true, false, currentMessageObject != null && currentMessageObject.isLivePhoto());
             videoSizeSet = true;
