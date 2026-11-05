@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.FileProvider;
 
 import org.telegram.tgnet.TLRPC;
+import org.telegram.ui.LaunchActivity;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -807,18 +808,32 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
 
     private synchronized void updateSummary() {
         int count = 0;
+        MessageObject latestMessage = null;
+        int latestNotification = 0;
         for (Entry entry : entries.values()) {
             if (!entry.notified) continue;
             count++;
+            if (entry.notification > latestNotification) {
+                latestMessage = entry.message;
+                latestNotification = entry.notification;
+            }
         }
-        for (PlaybackSession session : playbackSessions.values()) if (session.notified) count++;
+        for (PlaybackSession session : playbackSessions.values()) {
+            if (!session.notified) continue;
+            count++;
+            if (session.notification > latestNotification) {
+                latestMessage = session.message;
+                latestNotification = session.notification;
+            }
+        }
         NotificationManagerCompat manager = NotificationManagerCompat.from(ApplicationLoader.applicationContext);
         int summary = 19900 + account;
         // Cancelling a group summary can also remove its surviving child notifications.
         if (count == 0) { manager.cancel(NOTIFICATION_TAG, summary); return; }
         NotificationCompat.Builder builder = new NotificationCompat.Builder(ApplicationLoader.applicationContext, NotificationsController.OTHER_NOTIFICATIONS_CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_download).setContentTitle(LocaleController.getString(R.string.AppName))
-                .setContentText(LocaleController.formatPluralString("Files", count)).setGroup(NOTIFICATION_TAG + "_" + account).setGroupSummary(true).setOnlyAlertOnce(true);
+                .setContentText(LocaleController.formatPluralString("Files", count)).setGroup(NOTIFICATION_TAG + "_" + account).setGroupSummary(true).setOnlyAlertOnce(true)
+                .setContentIntent(openMessage(latestMessage, latestNotification == 0 ? summary : latestNotification));
         try { manager.notify(NOTIFICATION_TAG, summary, builder.build()); } catch (SecurityException e) { FileLog.e(e); }
     }
 
@@ -875,7 +890,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         NotificationsController.checkOtherNotificationsChannel();
         NotificationCompat.Builder builder = new NotificationCompat.Builder(ApplicationLoader.applicationContext, NotificationsController.OTHER_NOTIFICATIONS_CHANNEL)
                 .setSmallIcon(R.drawable.msg_gallery).setContentTitle(LocaleController.getString(R.string.FileSaved))
-                .setContentText(target.label()).setAutoCancel(true).setOnlyAlertOnce(true);
+                .setContentText(target.label()).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(openMessage(entry));
         // Use a separate ID so a completed save cannot replace a pending share of the same file.
         try { NotificationManagerCompat.from(ApplicationLoader.applicationContext).notify(NOTIFICATION_TAG, -entry.notification, builder.build()); }
         catch (SecurityException e) { FileLog.e(e); }
@@ -944,7 +959,8 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         NotificationsController.checkOtherNotificationsChannel();
         NotificationCompat.Builder builder = taskNotification(session.notification, session.notificationTime, text)
                 .setSubText(LocaleController.getString(R.string.PlaybackCache))
-                .setOngoing(!session.complete).setAutoCancel(session.complete);
+                .setOngoing(!session.complete).setAutoCancel(session.complete)
+                .setContentIntent(openMessage(session.message, session.notification));
         if (!session.complete) {
             builder.addAction(R.drawable.ic_close_white, LocaleController.getString(R.string.Cancel), control(session));
         }
@@ -966,6 +982,27 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         NotificationManagerCompat.from(ApplicationLoader.applicationContext).cancel(NOTIFICATION_TAG, entry.notification);
         updateSummary();
         if (immediate) changed();
+    }
+
+    private PendingIntent openMessage(Entry entry) {
+        return openMessage(entry == null ? null : entry.message, entry == null ? 19900 + account : entry.notification);
+    }
+
+    private PendingIntent openMessage(MessageObject message, int notification) {
+        Intent intent = new Intent(ApplicationLoader.applicationContext, LaunchActivity.class)
+                .setAction(Intent.ACTION_MAIN).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra("currentAccount", account);
+        if (message != null && message.messageOwner != null && message.getId() != 0 && message.getDialogId() != 0) {
+            long dialogId = message.getDialogId();
+            intent.setAction("com.tmessages.openchat.file" + account + "." + dialogId + "." + message.getId())
+                    .putExtra("file_download_dialog_id", dialogId)
+                    .putExtra("message_id", message.getId()).putExtra("topicId", message.getTopicId());
+            if (DialogObject.isEncryptedDialog(dialogId)) intent.putExtra("encId", DialogObject.getEncryptedChatId(dialogId));
+            else if (DialogObject.isUserDialog(dialogId)) intent.putExtra("userId", dialogId);
+            else intent.putExtra("chatId", -dialogId);
+        }
+        return PendingIntent.getActivity(ApplicationLoader.applicationContext, notification, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
     private synchronized void publish(Entry entry, boolean immediate) {
@@ -1008,19 +1045,14 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         if (entry.share != null) purposes = appendPurpose(purposes, LocaleController.getString(R.string.ShareFile));
         if (entry.state.external) purposes = appendPurpose(purposes, LocaleController.getString(R.string.OpenInExternalApp));
         NotificationCompat.Builder builder = taskNotification(entry.notification, entry.notificationTime, text)
-                .setOngoing(!shareReady).setAutoCancel(shareReady);
+                .setOngoing(!shareReady).setAutoCancel(shareReady).setContentIntent(openMessage(entry));
         if (!purposes.isEmpty() && !entry.failed) builder.setSubText(purposes);
         if (!entry.state.complete && !failed) {
             builder.setProgress(100, (int) (entry.progress * 100), !entry.state.blocked() && entry.progress == 0);
         }
         builder.addAction(R.drawable.ic_close_white, LocaleController.getString(R.string.Cancel), control(entry, "cancel"));
         if (shareReady) {
-            Intent send = shareIntent(entry.file, entry.source.mime).getParcelableExtra(Intent.EXTRA_INTENT);
-            Intent chooser = Intent.createChooser(send, LocaleController.getString(R.string.ShareFile), control(entry, "shared").getIntentSender())
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             builder.setDeleteIntent(control(entry, "cancel"));
-            builder.setContentIntent(PendingIntent.getActivity(ApplicationLoader.applicationContext, entry.notification, chooser,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
         }
         try { NotificationManagerCompat.from(ApplicationLoader.applicationContext).notify(NOTIFICATION_TAG, entry.notification, builder.build()); }
         catch (SecurityException e) { FileLog.e(e); }
@@ -1049,7 +1081,6 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
                     && entry.consumers.isEmpty() && entry.share == null && !entry.failed;
             if (externalReady) cancelExternal(entry); else cancel(entry);
         }
-        else if ("shared".equals(action)) consumeShare(entry.document);
     }
 
     @Override
