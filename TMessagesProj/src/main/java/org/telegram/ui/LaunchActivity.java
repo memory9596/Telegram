@@ -1551,6 +1551,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
 
     @SuppressLint("Range")
     private boolean handleIntent(Intent intent, boolean isNew, boolean restore, boolean fromPassword, Browser.Progress progress, boolean rebuildFragments, boolean openedTelegram) {
+        if (intent == null) return false;
         if (GiftInfoBottomSheet.handleIntent(intent, progress)) {
             return true;
         }
@@ -1560,8 +1561,15 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (AndroidUtilities.handleProxyIntent(this, intent, true)) {
             return true;
         }
-        if (intent == null || !Intent.ACTION_MAIN.equals(intent.getAction())) {
-            if (PhotoViewer.hasInstance() && PhotoViewer.getInstance().isVisible()) {
+        final long fileDownloadDialogId = intent.getLongExtra("file_download_dialog_id", 0);
+        MessageObject visibleMessage = PhotoViewer.hasInstance() && PhotoViewer.getInstance().isVisible()
+                ? PhotoViewer.getInstance().getCurrentMessageObject() : null;
+        boolean keepPhotoViewer = fileDownloadDialogId != 0 && visibleMessage != null && visibleMessage.messageOwner != null
+                && visibleMessage.getDialogId() == fileDownloadDialogId
+                && visibleMessage.getId() == intent.getIntExtra("message_id", 0)
+                && visibleMessage.currentAccount == intent.getIntExtra("currentAccount", UserConfig.selectedAccount);
+        if (!Intent.ACTION_MAIN.equals(intent.getAction())) {
+            if (!keepPhotoViewer && PhotoViewer.hasInstance() && PhotoViewer.getInstance().isVisible()) {
                 PhotoViewer.getInstance().closePhoto(false, true);
             }
             StoryRecorder.destroyInstance();
@@ -1588,6 +1596,24 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                 passcodeSaveIntentIsNew = isNew;
                 passcodeSaveIntentIsRestore = restore;
                 return false;
+            }
+        }
+        if (fileDownloadDialogId != 0 && UserConfig.getInstance(currentAccount).isClientActivated()) {
+            if (keepPhotoViewer && PhotoViewer.hasInstance() && PhotoViewer.getInstance().isVisible()) {
+                intent.setAction(null);
+                return true;
+            }
+            BaseFragment fragment = getActionBarLayout() == null ? null : getActionBarLayout().getLastFragment();
+            if (fragment instanceof ChatActivity) {
+                ChatActivity chat = (ChatActivity) fragment;
+                if (chat.getCurrentAccount() == currentAccount && chat.getDialogId() == fileDownloadDialogId
+                        && chat.getTopicId() == intent.getLongExtra("topicId", 0) && chat.getChatMode() == ChatActivity.MODE_DEFAULT
+                        && chat.getParentActivity() == this && chat.getFragmentView() != null) {
+                    int messageId = intent.getIntExtra("message_id", 0);
+                    if (chat.findMessageCell(messageId, true) == null) chat.scrollToMessageId(messageId, 0, true, 0, false, 0);
+                    intent.setAction(null);
+                    return true;
+                }
             }
         }
         boolean pushOpened = false;
@@ -3110,6 +3136,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             } else if (push_enc_id != 0) {
                 Bundle args = new Bundle();
                 args.putInt("enc_id", push_enc_id);
+                if (push_msg_id != 0) args.putInt("message_id", push_msg_id);
                 ChatActivity fragment = new ChatActivity(args);
                 if (getActionBarLayout().presentFragment(new INavigationLayout.NavigationParams(fragment).setNoAnimation(true))) {
                     pushOpened = true;
