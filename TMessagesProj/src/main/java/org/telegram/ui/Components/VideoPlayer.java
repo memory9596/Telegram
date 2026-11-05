@@ -80,6 +80,7 @@ import androidx.media3.exoplayer.video.SurfaceNotValidException;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.DispatchQueue;
+import org.telegram.messenger.DownloadController;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileDownloadTasks;
 import org.telegram.messenger.FileLog;
@@ -185,7 +186,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     private void updateManagedPlaybackSession(boolean restart) {
         MessageObject message = managedPlaybackMessage;
-        boolean auto = message != null && selectedQualityIndex == QUALITY_AUTO;
+        boolean auto = message != null && videoQualityAuto;
         FileDownloadTasks.PlaybackSession session = managedPlaybackSession;
         if (auto && (session == null || restart && session.isCancelled())) {
             managedPlaybackSession = FileDownloadTasks.getInstance(message.currentAccount).beginPlaybackSession(message);
@@ -297,6 +298,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     private volatile ArrayList<Quality> videoQualities;
     private Quality videoQualityToSelect;
+    private boolean videoQualityAuto;
     private ArrayList<VideoUri> manifestUris;
     private Uri videoUri, audioUri;
     private String videoType, audioType;
@@ -418,6 +420,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     public void preparePlayerLoop(Uri videoUri, String videoType, Uri audioUri, String audioType) {
         this.videoQualities = null;
         this.videoQualityToSelect = null;
+        this.videoQualityAuto = false;
         this.videoUri = videoUri;
         this.audioUri = audioUri;
         this.videoType = videoType;
@@ -493,6 +496,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     public void preparePlayer(Uri uri, String type, int priority, long videoByteOffset) {
         this.videoQualities = null;
         this.videoQualityToSelect = null;
+        this.videoQualityAuto = false;
         this.videoUri = uri;
         this.videoType = type;
         this.audioUri = null;
@@ -513,10 +517,15 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public void preparePlayer(ArrayList<Quality> qualities, Quality select) {
+        preparePlayer(qualities, select, false);
+    }
+
+    public void preparePlayer(ArrayList<Quality> qualities, Quality select, boolean auto) {
         allowManagedVariants(qualities);
         select = resolveQuality(qualities, select, allowAutoQuality);
         this.videoQualities = qualities;
         this.videoQualityToSelect = select;
+        this.videoQualityAuto = auto;
         this.videoUri = null;
         this.videoType = "hls";
         this.audioUri = null;
@@ -533,7 +542,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         currentStreamIsHls = false;
         selectedQualityIndex = select == null || videoQualities == null ? QUALITY_AUTO : videoQualities.indexOf(select);
         setSelectedQuality(true, select);
-        if (autoIsOriginal) {
+        if (auto || autoIsOriginal) {
             selectedQualityIndex = QUALITY_AUTO;
         }
     }
@@ -552,6 +561,13 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             if (TextUtils.equals(setting, idx)) return q;
         }
         return null;
+    }
+
+    public static Quality getInitialQuality(ArrayList<Quality> qualities, MessageObject message) {
+        if (qualities == null || qualities.isEmpty()) return null;
+        Quality saved = getSavedQuality(qualities, message);
+        if (saved != null) return saved;
+        return message == null ? null : DownloadController.getInstance(message.currentAccount).getAutoDownloadQuality(message, qualities);
     }
 
     public static void saveQuality(Quality q, MessageObject messageObject) {
@@ -703,7 +719,11 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public int getSelectedQuality() {
-        return selectedQualityIndex;
+        return videoQualityAuto ? QUALITY_AUTO : selectedQualityIndex;
+    }
+
+    public boolean isAutoQualitySelected() {
+        return videoQualityAuto;
     }
 
     public TLRPC.Document getCurrentDocument() {
@@ -723,7 +743,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public int getCurrentQualityIndex() {
-        if (selectedQualityIndex == QUALITY_AUTO) {
+        if (videoQualityAuto) {
             try {
                 if (autoIsOriginal) {
                     for (int j = 0; j < getQualitiesCount(); ++j) {
@@ -842,11 +862,27 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             return;
         }
         if (index != selectedQualityIndex) {
+            videoQualityAuto = false;
             selectedQualityIndex = index;
+            restartManagedPlayback();
             Quality q = null;
             if (videoQualities != null && index >= 0 && index < videoQualities.size())  q = videoQualities.get(index);
             setSelectedQuality(false, q);
+        } else {
+            restartManagedPlayback();
         }
+    }
+
+    public void setAutoQuality(Quality quality) {
+        if (player == null) return;
+        videoQualityAuto = true;
+        selectedQualityIndex = QUALITY_AUTO;
+        restartManagedPlayback();
+        setSelectedQuality(false, quality);
+    }
+
+    public Quality getAutoQuality(MessageObject message) {
+        return message == null ? null : DownloadController.getInstance(message.currentAccount).getAutoDownloadQuality(message, videoQualities);
     }
 
     private void setSelectedQuality(boolean start, Quality quality) {
@@ -1049,11 +1085,18 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         return qualities != null && qualities.size() > 1;
     }
 
-    public static TLRPC.Document getDocumentForThumb(int currentAccount, TLRPC.MessageMedia media) {
-        if (!(media instanceof TLRPC.TL_messageMediaDocument))
-            return null;
-        final VideoUri videoUri = getQualityForThumb(getQualities(currentAccount, media.document, media.alt_documents, 0, true));
-        return videoUri == null ? null : videoUri.document;
+    public static Quality getQualityForSize(ArrayList<Quality> qualities, long maxSize) {
+        if (qualities == null || maxSize <= 0) return null;
+        Quality selected = null;
+        long selectedSize = 0;
+        for (Quality quality : qualities) {
+            TLRPC.Document document = quality != null ? quality.getDownloadDocument() : null;
+            if (document != null && document.size > selectedSize && document.size <= maxSize) {
+                selected = quality;
+                selectedSize = document.size;
+            }
+        }
+        return selected;
     }
 
     public static VideoUri getQualityForThumb(ArrayList<Quality> qualities) {
@@ -1865,7 +1908,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                     }
                     videoQualities = Quality.filterByCodec(videoQualities);
                     if (videoQualities != null) {
-                        preparePlayer(videoQualities, videoQualityToSelect);
+                        preparePlayer(videoQualities, videoQualityToSelect, videoQualityAuto);
                     }
                     return;
                 }
@@ -1885,7 +1928,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                                 player.clearVideoTextureView(textureView);
                                 player.setVideoTextureView(textureView);
                                 if (videoQualities != null) {
-                                    preparePlayer(videoQualities, videoQualityToSelect);
+                                    preparePlayer(videoQualities, videoQualityToSelect, videoQualityAuto);
                                 } else if (loopingMediaSource) {
                                     preparePlayerLoop(videoUri, videoType, audioUri, audioType);
                                 } else {
@@ -1898,7 +1941,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                         player.clearVideoTextureView(textureView);
                         player.setVideoTextureView(textureView);
                         if (videoQualities != null) {
-                            preparePlayer(videoQualities, videoQualityToSelect);
+                            preparePlayer(videoQualities, videoQualityToSelect, videoQualityAuto);
                         } else if (loopingMediaSource) {
                             preparePlayerLoop(videoUri, videoType, audioUri, audioType);
                         } else {

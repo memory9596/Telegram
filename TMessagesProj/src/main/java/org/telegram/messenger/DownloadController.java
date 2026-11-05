@@ -27,6 +27,7 @@ import org.telegram.tgnet.TLRPC;
 import org.telegram.tgnet.tl.TL_account;
 import org.telegram.tgnet.tl.TL_stories;
 import org.telegram.ui.Components.Bulletin;
+import org.telegram.ui.Components.VideoPlayer;
 import org.telegram.ui.LaunchActivity;
 
 import java.io.File;
@@ -761,7 +762,9 @@ public class DownloadController extends BaseController implements NotificationCe
         } else {
             maxSize = preset.sizes[typeToIndex(type)];
         }
-        long size = MessageObject.getMessageSize(msg);
+        VideoPlayer.Quality previewQuality = isVideo ? getAutoDownloadQuality(message) : null;
+        TLRPC.Document previewDocument = previewQuality != null ? previewQuality.getDownloadDocument() : null;
+        long size = previewDocument != null ? previewDocument.size : MessageObject.getMessageSize(msg);
         if (isVideo && preset.preloadVideo && size > maxSize && maxSize > 2 * 1024 * 1024) {
             return (mask & type) != 0 ? 2 : 0;
         } else {
@@ -925,7 +928,7 @@ public class DownloadController extends BaseController implements NotificationCe
         } else {
             maxSize = preset.sizes[typeToIndex(type)];
         }
-        long size = MessageObject.getMessageSize(message);
+        long size = isVideo ? getAutoDownloadSize(MessageObject.getMedia(message), maxSize) : MessageObject.getMessageSize(message);
         if (isVideo && preset.preloadVideo && size > maxSize && maxSize > 2 * 1024 * 1024) {
             return (mask & type) != 0 ? 2 : 0;
         } else {
@@ -1007,12 +1010,41 @@ public class DownloadController extends BaseController implements NotificationCe
         } else {
             maxSize = preset.sizes[typeToIndex(type)];
         }
-        long size = MessageObject.getMediaSize(media);
+        long size = isVideo ? getAutoDownloadSize(media, maxSize) : MessageObject.getMediaSize(media);
         if (isVideo && preset.preloadVideo && size > maxSize && maxSize > 2 * 1024 * 1024) {
             return (mask & type) != 0 ? 2 : 0;
         } else {
             return (type == AUTODOWNLOAD_TYPE_PHOTO || size != 0 && size <= maxSize) && (type == AUTODOWNLOAD_TYPE_AUDIO || (mask & type) != 0) ? 1 : 0;
         }
+    }
+
+    public VideoPlayer.Quality getAutoDownloadQuality(MessageObject message) {
+        if (message == null || !message.hasVideoQualities() || message.videoQualities == null) {
+            return null;
+        }
+        return getAutoDownloadQuality(message, message.videoQualities);
+    }
+
+    public VideoPlayer.Quality getAutoDownloadQuality(MessageObject message, ArrayList<VideoPlayer.Quality> qualities) {
+        if (message == null || qualities == null) {
+            return null;
+        }
+        VideoPlayer.Quality selected = null;
+        long selectedSize = 0;
+        for (VideoPlayer.Quality quality : qualities) {
+            TLRPC.Document document = quality != null ? quality.getDownloadDocument() : null;
+            if (document != null && document.size > selectedSize && canDownloadMediaType(message, document.size) == 1) {
+                selected = quality;
+                selectedSize = document.size;
+            }
+        }
+        return selected;
+    }
+
+    private long getAutoDownloadSize(TLRPC.MessageMedia media, long maxSize) {
+        VideoPlayer.Quality quality = VideoPlayer.getQualityForSize(VideoPlayer.getQualities(currentAccount, media, true), maxSize);
+        TLRPC.Document document = quality != null ? quality.getDownloadDocument() : null;
+        return document != null ? document.size : MessageObject.getMediaSize(media);
     }
 
     protected boolean canDownloadNextTrack() {

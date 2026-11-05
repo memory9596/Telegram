@@ -10525,6 +10525,12 @@ public class MessageObject {
         return isVideo() ? getDocumentFast() : getDocument();
     }
 
+    public TLRPC.Document getPreviewDocument() {
+        VideoPlayer.Quality quality = isVideo() ? DownloadController.getInstance(currentAccount).getAutoDownloadQuality(this) : null;
+        TLRPC.Document document = quality != null ? quality.getDownloadDocument() : null;
+        return document != null ? document : getDownloadDocument();
+    }
+
     public String getDownloadFileName() {
         TLRPC.Document document = getDownloadDocument();
         return document != null ? FileLoader.getAttachFileName(document) : getFileName();

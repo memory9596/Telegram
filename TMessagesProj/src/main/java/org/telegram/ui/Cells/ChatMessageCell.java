@@ -6717,8 +6717,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             checkVideoPlayback(true, null);
         }
         if (messageObject != null && !messageObject.downloadExists()) {
-            int canDownload = FileLoader.getInstance(currentAccount).isFileDownloadBlocked(messageObject) ? 0 : DownloadController.getInstance(currentAccount).canDownloadMediaType(messageObject);
-            TLRPC.Document document = messageObject.getDownloadDocument();
+            TLRPC.Document document = messageObject.getPreviewDocument();
+            int canDownload = document != null && FileLoader.getInstance(currentAccount).isFileDownloadBlocked(FileLoader.getAttachFileName(document))
+                    ? 0 : DownloadController.getInstance(currentAccount).canDownloadMediaType(messageObject);
             boolean loadDocumentFromImageReceiver = MessageObject.isStickerDocument(document) || MessageObject.isAnimatedStickerDocument(document, true) || MessageObject.isGifDocument(document) || MessageObject.isRoundVideoDocument(document);
             if (!loadDocumentFromImageReceiver && !isSmallImage) {
                 TLRPC.PhotoSize photo = document == null ? FileLoader.getClosestPhotoSizeWithSize(messageObject.photoThumbs, AndroidUtilities.getPhotoSize()) : null;
@@ -6756,8 +6757,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     private void cancelLoading(MessageObject messageObject) {
-        if (messageObject != null && !FileDownloadTasks.keepsFile(currentAccount, messageObject.getDownloadDocument()) && !messageObject.mediaExists && !messageObject.putInDownloadsStore && !DownloadController.getInstance(currentAccount).isDownloading(messageObject.messageOwner.id) && !PhotoViewer.getInstance().isVisible()) {
-            TLRPC.Document document = messageObject.getDocument();
+        if (messageObject == null || messageObject.messageOwner == null) {
+            return;
+        }
+        TLRPC.Document document = messageObject.getPreviewDocument();
+        if (!FileDownloadTasks.keepsFile(currentAccount, document) && !messageObject.mediaExists && !messageObject.putInDownloadsStore && !DownloadController.getInstance(currentAccount).isDownloading(messageObject.messageOwner.id) && !PhotoViewer.getInstance().isVisible()) {
             boolean loadDocumentFromImageReceiver = MessageObject.isStickerDocument(document) || MessageObject.isAnimatedStickerDocument(document, true) || MessageObject.isGifDocument(document) || MessageObject.isRoundVideoDocument(document);
             if (!loadDocumentFromImageReceiver) {
                 if (document != null) {
@@ -17468,6 +17472,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             autoDownload = false;
         } else {
             autoDownload = !FileLoader.getInstance(currentAccount).isFileDownloadBlocked(currentMessageObject) && DownloadController.getInstance(currentAccount).canDownloadMedia(currentMessageObject);
+        }
+        if (currentMessageObject.hasVideoQualities()) {
+            autoDownload = false;
         }
         if (currentMessageObject.isHiddenSensitive()) {
             autoDownload = false;
