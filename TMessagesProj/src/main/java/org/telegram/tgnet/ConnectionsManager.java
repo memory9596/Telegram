@@ -400,6 +400,26 @@ public class ConnectionsManager extends BaseController {
             FileLog.d("send request " + object + " with token = " + requestToken);
         }
         try {
+            int transferSize = 0;
+            int baseConnectionType = connectionType & 0xffff;
+            // Only FileLoadOperation opts downloads in. Live call segments retain their existing scheduling.
+            if ((flags & RequestFlagDownloadByteBudget) != 0 && baseConnectionType == ConnectionTypeDownload) {
+                if (object instanceof TLRPC.TL_upload_getFile) {
+                    transferSize = ((TLRPC.TL_upload_getFile) object).limit;
+                } else if (object instanceof TLRPC.TL_upload_getWebFile) {
+                    transferSize = ((TLRPC.TL_upload_getWebFile) object).limit;
+                } else if (object instanceof TLRPC.TL_upload_getCdnFile) {
+                    transferSize = ((TLRPC.TL_upload_getCdnFile) object).limit;
+                }
+            } else if (baseConnectionType == ConnectionTypeUpload) {
+                NativeByteBuffer bytes = null;
+                if (object instanceof TLRPC.TL_upload_saveFilePart) {
+                    bytes = ((TLRPC.TL_upload_saveFilePart) object).bytes;
+                } else if (object instanceof TLRPC.TL_upload_saveBigFilePart) {
+                    bytes = ((TLRPC.TL_upload_saveBigFilePart) object).bytes;
+                }
+                transferSize = bytes != null ? bytes.limit() : 0;
+            }
             NativeByteBuffer buffer = new NativeByteBuffer(object.getObjectSize());
             object.serializeToStream(buffer);
             object.freeResources();
@@ -477,18 +497,7 @@ public class ConnectionsManager extends BaseController {
                     FileLog.e(e);
                 }
             }, onQuickAck, onWriteToSocket);
-            int downloadSize = 0;
-            // Only FileLoadOperation opts in. Live call segments retain their existing scheduling.
-            if ((flags & RequestFlagDownloadByteBudget) != 0 && (connectionType & 0xffff) == ConnectionTypeDownload) {
-                if (object instanceof TLRPC.TL_upload_getFile) {
-                    downloadSize = ((TLRPC.TL_upload_getFile) object).limit;
-                } else if (object instanceof TLRPC.TL_upload_getWebFile) {
-                    downloadSize = ((TLRPC.TL_upload_getWebFile) object).limit;
-                } else if (object instanceof TLRPC.TL_upload_getCdnFile) {
-                    downloadSize = ((TLRPC.TL_upload_getCdnFile) object).limit;
-                }
-            }
-            native_sendRequest(currentAccount, buffer.address, flags, datacenterId, connectionType, immediate, requestToken, downloadSize);
+            native_sendRequest(currentAccount, buffer.address, flags, datacenterId, connectionType, immediate, requestToken, transferSize);
         } catch (Exception e) {
             FileLog.e(e);
         }
@@ -1012,7 +1021,7 @@ public class ConnectionsManager extends BaseController {
     public static native int native_getCurrentDatacenterId(int currentAccount);
     public static native long native_getCurrentAuthKeyId(int currentAccount);
     public static native int native_getTimeDifference(int currentAccount);
-    public static native void native_sendRequest(int currentAccount, long object, int flags, int datacenterId, int connectionType, boolean immediate, int requestToken, int downloadSize);
+    public static native void native_sendRequest(int currentAccount, long object, int flags, int datacenterId, int connectionType, boolean immediate, int requestToken, int transferSize);
     public static native void native_cancelRequest(int currentAccount, int token, boolean notifyServer);
     public static native void native_cleanUp(int currentAccount, boolean resetKeys);
     public static native void native_cancelRequestsForGuid(int currentAccount, int guid);
@@ -1489,6 +1498,8 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static long lastPremiumFloodWaitShown = 0;
+    // Keep server-directed backoff active while suppressing the Premium upsell UI.
+    public static boolean premiumFloodWaitBulletinsEnabled = false;
     @Keep
     public static void onPremiumFloodWait(final int currentAccount, final int requestToken, boolean isUpload) {
         AndroidUtilities.runOnUIThread(() -> {

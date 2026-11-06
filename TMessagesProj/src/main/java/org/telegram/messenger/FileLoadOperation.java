@@ -849,8 +849,17 @@ public class FileLoadOperation {
         if (useDownloadByteBudget) {
             boolean premium = UserConfig.getInstance(currentAccount).isPremium();
             downloadConnectionsCount = premium ? ConnectionsManager.DownloadConnectionsCount : 2;
-            int byteBudget = (premium ? 16 : 2) * 1024 * 1024;
+            int byteBudget = (premium ? 16 : 1) * 1024 * 1024;
             currentMaxDownloadRequests = byteBudget / currentDownloadChunkSize;
+            if (!premium && paceDocumentRequests) {
+                if (downloadRequestPacer == null) {
+                    downloadRequestPacer = new DownloadRequestPacer();
+                }
+            } else {
+                downloadRequestPacer = null;
+            }
+        } else {
+            downloadRequestPacer = null;
         }
     }
 

@@ -20,7 +20,6 @@
 #include <string>
 #include <cinttypes>
 #include "ConnectionsManager.h"
-#include "DownloadRequestBudget.h"
 #include "FileLog.h"
 #include "EventObject.h"
 #include "MTProtoScheme.h"
@@ -44,6 +43,7 @@ jmethodID jclass_ByteBuffer_allocateDirect = nullptr;
 #endif
 
 static bool done = false;
+static uint32_t getFileTransferSize(Request *request);
 
 ConnectionsManager::ConnectionsManager(int32_t instance) {
     instanceNum = instance;
@@ -158,6 +158,7 @@ ConnectionsManager& ConnectionsManager::getInstance(int32_t instanceNum) {
 }
 
 int ConnectionsManager::callEvents(int64_t now) {
+    int timeout = -1;
     if (!events.empty()) {
         for (auto iter = events.begin(); iter != events.end();) {
             EventObject *eventObject = (*iter);
@@ -166,10 +167,16 @@ int ConnectionsManager::callEvents(int64_t now) {
                 eventObject->onEvent(0);
             } else {
                 int diff = (int) (eventObject->time - now);
-                return diff > 1000 || diff < 0 ? 1000 : diff;
+                timeout = diff > 1000 || diff < 0 ? 1000 : diff;
+                break;
             }
         }
     }
+    int transferDelay = downloadRequestScheduler.nextDelay(now);
+    if (transferDelay >= 0 && (timeout < 0 || transferDelay < timeout)) timeout = transferDelay;
+    transferDelay = uploadRequestScheduler.nextDelay(now);
+    if (transferDelay >= 0 && (timeout < 0 || transferDelay < timeout)) timeout = transferDelay;
+    if (timeout >= 0) return timeout;
     if (!networkPaused) {
         return 1000;
     }
@@ -665,6 +672,13 @@ void ConnectionsManager::cleanUp(bool resetKeys, int32_t datacenterId) {
             iter = runningRequests.erase(iter);
         }
         quickAckIdToRequestIds.clear();
+        if (datacenterId == -1) {
+            downloadRequestScheduler.clear();
+            uploadRequestScheduler.clear();
+        } else {
+            downloadRequestScheduler.clear(datacenterId);
+            uploadRequestScheduler.clear(datacenterId);
+        }
 
         for (auto & datacenter : datacenters) {
             if (datacenterId != -1 && datacenter.second->getDatacenterId() != datacenterId) {
@@ -1413,6 +1427,10 @@ void ConnectionsManager::processServerResponse(TLObject *message, int64_t messag
                                 request->startTime = 0;
                                 request->startTimeMillis = 0;
                                 request->minStartTime = (int32_t) (getCurrentTimeMonotonicMillis() / 1000 + waitTime);
+                                FileRequestScheduler *scheduler = getFileRequestScheduler(request->connectionType);
+                                if (discardResponse && scheduler != nullptr && getFileTransferSize(request) != 0) {
+                                    scheduler->onFloodWait(datacenter->getDatacenterId(), getCurrentTimeMonotonicMillis(), waitTime, currentUserPremium, isPremiumFloodWait);
+                                }
                                 if (isPremiumFloodWait && delegate != nullptr) {
                                     delegate->onPremiumFloodWait(instanceNum, request->requestToken, (request->connectionType & ConnectionTypeUpload) != 0);
                                 }
@@ -1490,6 +1508,10 @@ void ConnectionsManager::processServerResponse(TLObject *message, int64_t messag
                             request->onComplete(nullptr, implicitError != nullptr ? implicitError : error2, connection->currentNetworkType, timeMessage, request->messageId, dcId);
                             delete error2;
                         } else {
+                            FileRequestScheduler *scheduler = getFileRequestScheduler(request->connectionType);
+                            if (scheduler != nullptr && getFileTransferSize(request) != 0) {
+                                scheduler->onRequestSucceeded(getCurrentTimeMonotonicMillis(), currentUserPremium);
+                            }
                             request->onComplete(response->result.get(), nullptr, connection->currentNetworkType, timeMessage, request->messageId, dcId);
                         }
                     }
@@ -2441,9 +2463,20 @@ inline void addMessageToDatacenter(uint32_t datacenterId, NetworkMessage *networ
 #define MAX_DOWNLOAD_REQUESTS 16 * 2
 #define MAX_UPLOAD_REQUESTS 10 * 3
 
-static uint32_t getDownloadSize(Request *request) {
+static uint32_t getFileTransferSize(Request *request) {
     auto apiRequest = dynamic_cast<TL_api_request *>(request->rawRequest);
-    return apiRequest != nullptr ? apiRequest->downloadSize : 0;
+    return apiRequest != nullptr ? apiRequest->transferSize : 0;
+}
+
+FileRequestScheduler *ConnectionsManager::getFileRequestScheduler(uint32_t connectionType) {
+    switch (connectionType & 0xffff) {
+        case ConnectionTypeDownload:
+            return &downloadRequestScheduler;
+        case ConnectionTypeUpload:
+            return &uploadRequestScheduler;
+        default:
+            return nullptr;
+    }
 }
 
 void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t dc, Connection *connectedDownload) {
@@ -2621,6 +2654,14 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                 }
             }
 
+            uint32_t retryTransferSize = getFileTransferSize(request);
+            FileRequestScheduler *scheduler = getFileRequestScheduler(requestConnectionType);
+            if (retryTransferSize != 0 && scheduler != nullptr
+                    && !scheduler->acquire(datacenterId, retryTransferSize, currentTimeMillis, currentUserPremium)) {
+                iter++;
+                continue;
+            }
+
             if (request->connectionToken != 0 && request->connectionToken != connection->getConnectionToken()) {
                 request->lastResendTime = 0;
                 request->isResending = true;
@@ -2712,7 +2753,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
     for (const auto &request : runningRequests) {
         if (!request->cancelled && (request->connectionType & 0xffff) == ConnectionTypeDownload) {
             uint32_t datacenterId = request->datacenterId == DEFAULT_DATACENTER_ID ? currentDatacenterId : request->datacenterId;
-            downloadBudget.account(datacenterId, (request->requestFlags & RequestFlagSmallDownload) != 0, getDownloadSize(request.get()));
+            downloadBudget.account(datacenterId, (request->requestFlags & RequestFlagSmallDownload) != 0, getFileTransferSize(request.get()));
         }
     }
 
@@ -2842,9 +2883,9 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
 
         Connection *connection = requestDatacenter->getConnectionByType(request->connectionType, true, canUseUnboundKey);
 
-        // Keep budgeted chunks queued until the socket is ready. Otherwise they
+        // Keep paced chunks queued until the socket is ready. Otherwise they
         // are buffered here and then sent again by onConnectionConnected.
-        if (((request->connectionType & ConnectionTypeGeneric) || getDownloadSize(request) != 0) && connection->getConnectionToken() == 0) {
+        if (((request->connectionType & ConnectionTypeGeneric) || getFileTransferSize(request) != 0) && connection->getConnectionToken() == 0) {
             iter++;
             continue;
         }
@@ -2875,12 +2916,18 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                         DEBUG_D("skip queue, token = %d: download type: network unavailable", request->requestToken);
                     continue;
                 }
-                uint32_t bytes = getDownloadSize(request);
+                uint32_t bytes = getFileTransferSize(request);
                 if (bytes != 0) {
-                    if (!downloadBudget.acquire(datacenterId, (request->requestFlags & RequestFlagSmallDownload) != 0, bytes)) {
+                    bool small = (request->requestFlags & RequestFlagSmallDownload) != 0;
+                    if (!downloadBudget.available(datacenterId, small, bytes)) {
                         iter++;
                         continue;
                     }
+                    if (!downloadRequestScheduler.acquire(datacenterId, bytes, currentTimeMillis, currentUserPremium)) {
+                        iter++;
+                        continue;
+                    }
+                    downloadBudget.account(datacenterId, small, bytes);
                     break;
                 }
                 // Non-opted-in requests retain the original count-based scheduling.
@@ -2921,6 +2968,10 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                     iter++;
                     if (LOGS_ENABLED)
                         DEBUG_D("skip queue, token = %d: upload type: running upload requests >= 10", request->requestToken);
+                    continue;
+                }
+                if (!uploadRequestScheduler.acquire(datacenterId, getFileTransferSize(request), currentTimeMillis, currentUserPremium)) {
+                    iter++;
                     continue;
                 }
                 uploadRunningRequestCount++;

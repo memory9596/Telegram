@@ -27,7 +27,7 @@ class TL_api_request : public TLObject {
 
 public:
     NativeByteBuffer *request = nullptr;
-    uint32_t downloadSize = 0; // Local scheduling metadata; never serialized.
+    uint32_t transferSize = 0; // Local scheduling metadata; never serialized.
 
     ~TL_api_request();
     bool isNeedLayer();

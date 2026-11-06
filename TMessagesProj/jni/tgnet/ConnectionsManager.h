@@ -17,6 +17,7 @@
 #include <atomic>
 #include <unordered_set>
 #include "Defines.h"
+#include "DownloadRequestBudget.h"
 
 #ifdef ANDROID
 #include <jni.h>
@@ -105,6 +106,7 @@ private:
     void clearRequestsForDatacenter(Datacenter *datacenter, HandshakeType type);
     void registerForInternalPushUpdates();
     void processRequestQueue(uint32_t connectionType, uint32_t datacenterId, Connection *connectedDownload = nullptr);
+    FileRequestScheduler *getFileRequestScheduler(uint32_t connectionType);
     void authorizeOnMovingDatacenter();
     void authorizedOnMovingDatacenter();
     Datacenter *getDatacenterWithId(uint32_t datacenterId);
@@ -251,6 +253,8 @@ private:
     std::vector<std::pair<Datacenter *, ConnectionType>> neededDatacenters;
     std::map<uint32_t, uint32_t> downloadRunningRequestCount;
     std::map<uint32_t, uint32_t> downloadCancelRunningRequestCount;
+    FileRequestScheduler downloadRequestScheduler;
+    FileRequestScheduler uploadRequestScheduler;
     std::vector<Datacenter *> unauthorizedDatacenters;
     NativeByteBuffer *sizeCalculator;
 

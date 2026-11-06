@@ -106,10 +106,10 @@ jint getTimeDifference(JNIEnv *env, jclass c, jint instanceNum) {
     return ConnectionsManager::getInstance(instanceNum).getTimeDifference();
 }
 
-void sendRequest(JNIEnv *env, jclass c, jint instanceNum, jlong object, jint flags, jint datacenterId, jint connectionType, jboolean immediate, jint token, jint downloadSize) {
+void sendRequest(JNIEnv *env, jclass c, jint instanceNum, jlong object, jint flags, jint datacenterId, jint connectionType, jboolean immediate, jint token, jint transferSize) {
     TL_api_request *request = new TL_api_request();
     request->request = (NativeByteBuffer *) (intptr_t) object;
-    request->downloadSize = downloadSize > 0 ? (uint32_t) downloadSize : 0;
+    request->transferSize = transferSize > 0 ? (uint32_t) transferSize : 0;
     ConnectionsManager::getInstance(instanceNum).sendRequest(request, ([instanceNum, token](TLObject *response, TL_error *error, int32_t networkType, int64_t responseTime, int64_t msgId, int32_t dcId) {
         TL_api_response *resp = (TL_api_response *) response;
         jlong ptr = 0;

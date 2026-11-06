@@ -11861,6 +11861,9 @@ public class SharedMediaLayout extends FrameLayout implements NotificationCenter
 //        }
 
         final int currentAccount = profileActivity.getCurrentAccount();
+        if (!ConnectionsManager.premiumFloodWaitBulletinsEnabled) {
+            return;
+        }
 
         final float n;
         if (isUpload) {

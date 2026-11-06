@@ -790,6 +790,9 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
         if (UserConfig.getInstance(currentAccount).isPremium() || MessagesController.getInstance(currentAccount).premiumFeaturesBlocked()) {
             return;
         }
+        if (!ConnectionsManager.premiumFloodWaitBulletinsEnabled) {
+            return;
+        }
 
         final float n;
         if (isUpload) {
