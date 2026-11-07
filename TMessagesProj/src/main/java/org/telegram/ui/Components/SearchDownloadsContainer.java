@@ -562,9 +562,9 @@ public class SearchDownloadsContainer extends FrameLayout implements Notificatio
                                         FileLoader.getInstance(currentAccount).cancelLoadFileByUser(messageObject.getDownloadDocument(), messageObject);
                                     } else {
                                         FileLoader.getInstance(currentAccount).loadFileByUser(messageObject.getDownloadDocument(), messageObject, FileLoader.PRIORITY_LOW, 0);
-                                        DownloadController.getInstance(currentAccount).updateFilesLoadingPriority();
                                     }
                                 }
+                                if (!hasCurrentDownload) DownloadController.getInstance(currentAccount).updateFilesLoadingPriority();
                                 update(true);
                             }
                         });

@@ -227,6 +227,7 @@ public class FileLoadOperation {
     private long receivedBytes;
     private long lastReceivedBytes;
     private long speedTime;
+    private final Object speedSync = new Object();
     public long totalBytesCount;
     private long bytesCountPadding;
     private long streamStartOffset;
@@ -665,6 +666,8 @@ public class FileLoadOperation {
                             writingToFilePartsStream = false;
                             if (closeFilePartsStreamOnWriteEnd) {
                                 try {
+                                    // the stream is unbuffered ("rw"), so flush the parts index once here
+                                    filePartsStream.getFD().sync();
                                     filePartsStream.getChannel().close();
                                 } catch (Exception e) {
                                     FileLog.e(e);
@@ -902,7 +905,7 @@ public class FileLoadOperation {
         final boolean alreadyStarted = state != stateIdle;
         final boolean wasPaused = paused;
         if (wasPaused) {
-            synchronized (this) {
+            synchronized (speedSync) {
                 speedTime = 0;
             }
         }
@@ -1199,7 +1202,7 @@ public class FileLoadOperation {
                     cacheFileParts.delete();
                 }
                 try {
-                    filePartsStream = new RandomAccessFile(cacheFileParts, "rws");
+                    filePartsStream = new RandomAccessFile(cacheFileParts, "rw");
                     long len = filePartsStream.length();
                     if (len % 8 == 4) {
                         len -= 4;
@@ -1265,7 +1268,7 @@ public class FileLoadOperation {
             if (fileNameIv != null) {
                 cacheIvTemp = new File(tempPath, fileNameIv);
                 try {
-                    fiv = new RandomAccessFile(cacheIvTemp, "rws");
+                    fiv = new RandomAccessFile(cacheIvTemp, "rwd");
                     if (downloadedBytes != 0 && !newKeyGenerated) {
                         long len = cacheIvTemp.length();
                         if (len > 0 && len % 64 == 0) {
@@ -1292,7 +1295,7 @@ public class FileLoadOperation {
             }
             updateProgress();
             try {
-                fileOutputStream = new RandomAccessFile(cacheFileTemp, "rws");
+                fileOutputStream = new RandomAccessFile(cacheFileTemp, "rwd");
                 if (downloadedBytes != 0) {
                     fileOutputStream.seek(downloadedBytes);
                 }
@@ -1359,14 +1362,16 @@ public class FileLoadOperation {
     }
 
     // Sample network payload only; merging local preload ranges also advances download progress.
-    synchronized long getDownloadSpeed() {
-        long now = SystemClock.elapsedRealtime();
-        long elapsed = now - speedTime;
-        long speed = speedTime == 0 || elapsed <= 0 || paused || state != stateDownloading
-                ? 0 : (receivedBytes - lastReceivedBytes) * 1000 / elapsed;
-        lastReceivedBytes = receivedBytes;
-        speedTime = now;
-        return speed;
+    long getDownloadSpeed() {
+        synchronized (speedSync) {
+            long now = SystemClock.elapsedRealtime();
+            long elapsed = now - speedTime;
+            long speed = speedTime == 0 || elapsed <= 0 || paused || state != stateDownloading
+                    ? 0 : (receivedBytes - lastReceivedBytes) * 1000 / elapsed;
+            lastReceivedBytes = receivedBytes;
+            speedTime = now;
+            return speed;
+        }
     }
 
     public boolean isPaused() {
@@ -1570,6 +1575,8 @@ public class FileLoadOperation {
                 synchronized (FileLoadOperation.this) {
                     if (!writingToFilePartsStream) {
                         try {
+                            // the stream is unbuffered ("rw"), so flush the parts index once here
+                            filePartsStream.getFD().sync();
                             filePartsStream.getChannel().close();
                         } catch (Exception e) {
                             FileLog.e(e);
@@ -2725,7 +2732,7 @@ public class FileLoadOperation {
                                 : requestInfo.responseWeb != null ? requestInfo.responseWeb.bytes
                                 : requestInfo.responseCdn != null ? requestInfo.responseCdn.bytes : null;
                         if (bytes != null) {
-                            synchronized (FileLoadOperation.this) {
+                            synchronized (speedSync) {
                                 receivedBytes += bytes.limit();
                             }
                         }

@@ -40,6 +40,8 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     private final Set<String> cancelledFiles = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private boolean updatingSpeed;
     private final Runnable updateSpeed = this::updateDownloadSpeed;
+    private final AtomicBoolean summaryPending = new AtomicBoolean();
+    private final AtomicBoolean changePending = new AtomicBoolean();
 
     public static void clearStaleNotifications() {
         NotificationManager manager = (NotificationManager) ApplicationLoader.applicationContext.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -182,6 +184,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         long downloadedBytes;
         long totalBytes;
         long lastNotification;
+        volatile int notificationVersion;
         long speed;
         boolean failed;
         boolean viewerBackground;
@@ -365,15 +368,12 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         if (entry == null) {
             entry = new Entry(source);
             entry.state.independentDownload = FileLoader.getInstance(account).isLoadingFileIndependently(name);
-            entry.file = source.localFile(account);
-            entry.state.complete = entry.file != null;
-            if (entry.state.complete) {
-                if (entry.totalBytes <= 0) entry.totalBytes = entry.file.length();
-                entry.downloadedBytes = entry.totalBytes;
-                entry.progress = 1;
-            }
             if (cancelledFiles.contains(name)) entry.state.pause = State.Pause.USER;
             entries.put(name, entry);
+            Entry loading = entry;
+            Utilities.globalQueue.postRunnable(() -> {
+                if (entries.get(name) == loading) complete(loading, source.localFile(account));
+            });
         }
         return entry;
     }
@@ -427,12 +427,12 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         publish(entry, true);
     }
 
-    public synchronized boolean isUserPaused(TLRPC.Document document) {
+    public boolean isUserPaused(TLRPC.Document document) {
         Entry entry = find(document);
         return entry != null && entry.state.pause == State.Pause.USER;
     }
 
-    public synchronized boolean isIndependentActive(TLRPC.Document document) {
+    public boolean isIndependentActive(TLRPC.Document document) {
         Entry entry = find(document);
         return entry != null && entry.state.independentDownload && !entry.state.complete && !entry.state.cancelled
                 && entry.state.pause != State.Pause.USER;
@@ -752,7 +752,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         return Intent.createChooser(intent, LocaleController.getString(R.string.ShareFile));
     }
 
-    private synchronized Entry find(TLRPC.Document document) {
+    private Entry find(TLRPC.Document document) {
         return document == null ? null : entries.get(FileLoader.getAttachFileName(document));
     }
 
@@ -772,7 +772,8 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
 
     private synchronized void remove(Entry entry) {
         if (!entries.remove(entry.fileName, entry)) return;
-        NotificationManagerCompat.from(ApplicationLoader.applicationContext).cancel(NOTIFICATION_TAG, entry.notification);
+        entry.notificationVersion++;
+        cancelNotification(NOTIFICATION_TAG, entry.notification);
         if (entries.isEmpty()) {
             AndroidUtilities.cancelRunOnUIThread(updateSpeed);
             updatingSpeed = false;
@@ -781,16 +782,26 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         changed();
     }
 
-    private synchronized void updateSummary() {
+    private void updateSummary() {
+        if (!summaryPending.compareAndSet(false, true)) return;
+        Utilities.globalQueue.postRunnable(() -> {
+            summaryPending.set(false);
+            sendSummary();
+        });
+    }
+
+    private void sendSummary() {
         int count = 0;
         MessageObject latestMessage = null;
         int latestNotification = 0;
-        for (Entry entry : entries.values()) {
-            if (!entry.notified) continue;
-            count++;
-            if (entry.notification > latestNotification) {
-                latestMessage = entry.message;
-                latestNotification = entry.notification;
+        synchronized (this) {
+            for (Entry entry : entries.values()) {
+                if (!entry.notified) continue;
+                count++;
+                if (entry.notification > latestNotification) {
+                    latestMessage = entry.message;
+                    latestNotification = entry.notification;
+                }
             }
         }
         NotificationManagerCompat manager = NotificationManagerCompat.from(ApplicationLoader.applicationContext);
@@ -804,8 +815,12 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         try { manager.notify(NOTIFICATION_TAG, summary, builder.build()); } catch (SecurityException e) { FileLog.e(e); }
     }
 
-    private synchronized void changed() {
-        AndroidUtilities.runOnUIThread(() -> NotificationCenter.getInstance(account).postNotificationName(NotificationCenter.onDownloadingFilesChanged));
+    private void changed() {
+        if (!changePending.compareAndSet(false, true)) return;
+        AndroidUtilities.runOnUIThread(() -> {
+            changePending.set(false);
+            NotificationCenter.getInstance(account).postNotificationName(NotificationCenter.onDownloadingFilesChanged);
+        });
     }
 
     private synchronized void finishExports(Entry entry) {
@@ -853,17 +868,19 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         for (FileExport.Callback callback : callbacks) AndroidUtilities.runOnUIThread(() -> callback.done(success));
     }
 
-    private synchronized void savedNotification(Entry entry, FileExport.Target target) {
-        NotificationsController.checkOtherNotificationsChannel();
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(ApplicationLoader.applicationContext, NotificationsController.OTHER_NOTIFICATIONS_CHANNEL)
-                .setSmallIcon(R.drawable.msg_gallery).setContentTitle(LocaleController.getString(R.string.FileSaved))
-                .setContentText(target.label()).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(openMessage(entry));
-        // Use a separate ID so a completed save cannot replace a pending share of the same file.
-        try { NotificationManagerCompat.from(ApplicationLoader.applicationContext).notify(NOTIFICATION_TAG, -entry.notification, builder.build()); }
-        catch (SecurityException e) { FileLog.e(e); }
+    private void savedNotification(Entry entry, FileExport.Target target) {
+        Utilities.globalQueue.postRunnable(() -> {
+            NotificationsController.checkOtherNotificationsChannel();
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(ApplicationLoader.applicationContext, NotificationsController.OTHER_NOTIFICATIONS_CHANNEL)
+                    .setSmallIcon(R.drawable.msg_gallery).setContentTitle(LocaleController.getString(R.string.FileSaved))
+                    .setContentText(target.label()).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(openMessage(entry));
+            // Use a separate ID so a completed save cannot replace a pending share of the same file.
+            try { NotificationManagerCompat.from(ApplicationLoader.applicationContext).notify(NOTIFICATION_TAG, -entry.notification, builder.build()); }
+            catch (SecurityException e) { FileLog.e(e); }
+        });
     }
 
-    private synchronized PendingIntent control(Entry entry, String action) {
+    private PendingIntent control(Entry entry, String action) {
         Intent intent = new Intent(ApplicationLoader.applicationContext, FileDownloadReceiver.class)
                 .setAction(ApplicationLoader.getApplicationId() + ".FILE_DOWNLOAD." + NOTIFICATION_TAG + "." + action)
                 .putExtra("account", account).putExtra("file", entry.fileName)
@@ -907,9 +924,14 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
     private synchronized void hide(Entry entry, boolean immediate) {
         if (!entry.notified) return;
         entry.notified = false;
-        NotificationManagerCompat.from(ApplicationLoader.applicationContext).cancel(NOTIFICATION_TAG, entry.notification);
+        entry.notificationVersion++;
+        cancelNotification(NOTIFICATION_TAG, entry.notification);
         updateSummary();
         if (immediate) changed();
+    }
+
+    private static void cancelNotification(String tag, int notification) {
+        Utilities.globalQueue.postRunnable(() -> NotificationManagerCompat.from(ApplicationLoader.applicationContext).cancel(tag, notification));
     }
 
     private PendingIntent openMessage(Entry entry) {
@@ -950,7 +972,6 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
             if (!entry.state.playback && !entry.state.external) { remove(entry); return; }
             if (!externalReady) { hide(entry, immediate); return; }
         }
-        NotificationsController.checkOtherNotificationsChannel();
         int status = shareReady ? R.string.ReadyToShare : entry.failed ? R.string.DownloadFailed
                 : failed ? R.string.ErrorOccurred : entry.state.blocked() ? R.string.DownloadPaused
                 : entry.state.complete ? R.string.SavingContentTitle : R.string.Downloading;
@@ -968,18 +989,28 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         for (FileExport.Target target : entry.saves.keySet()) purposes = appendPurpose(purposes, target.label());
         if (entry.share != null) purposes = appendPurpose(purposes, LocaleController.getString(R.string.ShareFile));
         if (entry.state.external) purposes = appendPurpose(purposes, LocaleController.getString(R.string.OpenInExternalApp));
-        NotificationCompat.Builder builder = taskNotification(entry.notification, entry.notificationTime, text)
-                .setOngoing(!shareReady).setAutoCancel(shareReady).setContentIntent(openMessage(entry));
-        if (!purposes.isEmpty() && !entry.failed) builder.setSubText(purposes);
-        if (!entry.state.complete && !failed) {
-            builder.setProgress(100, (int) (entry.progress * 100), !entry.state.blocked() && entry.progress == 0);
-        }
-        builder.addAction(R.drawable.ic_close_white, LocaleController.getString(R.string.Cancel), control(entry, "cancel"));
-        if (shareReady) {
-            builder.setDeleteIntent(control(entry, "cancel"));
-        }
-        try { NotificationManagerCompat.from(ApplicationLoader.applicationContext).notify(NOTIFICATION_TAG, entry.notification, builder.build()); }
-        catch (SecurityException e) { FileLog.e(e); }
+        String subText = purposes;
+        boolean showSubText = !subText.isEmpty() && !entry.failed;
+        boolean showProgress = !entry.state.complete && !failed;
+        int progress = (int) (entry.progress * 100);
+        boolean indeterminate = !entry.state.blocked() && entry.progress == 0;
+        int version = ++entry.notificationVersion;
+        Utilities.globalQueue.postRunnable(() -> {
+            if (entries.get(entry.fileName) != entry || entry.notificationVersion != version) return;
+            NotificationsController.checkOtherNotificationsChannel();
+            NotificationCompat.Builder builder = taskNotification(entry.notification, entry.notificationTime, text)
+                    .setOngoing(!shareReady).setAutoCancel(shareReady).setContentIntent(openMessage(entry));
+            if (showSubText) builder.setSubText(subText);
+            if (showProgress) {
+                builder.setProgress(100, progress, indeterminate);
+            }
+            builder.addAction(R.drawable.ic_close_white, LocaleController.getString(R.string.Cancel), control(entry, "cancel"));
+            if (shareReady) {
+                builder.setDeleteIntent(control(entry, "cancel"));
+            }
+            try { NotificationManagerCompat.from(ApplicationLoader.applicationContext).notify(NOTIFICATION_TAG, entry.notification, builder.build()); }
+            catch (SecurityException e) { FileLog.e(e); }
+        });
         boolean wasNotified = entry.notified;
         entry.notified = true;
         if (!wasNotified) updateSummary();
@@ -991,7 +1022,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         if (notification <= 20000 || !isTaskTag(tag)) return;
         Entry entry = fileName == null ? null : entries.get(fileName);
         if (!NOTIFICATION_TAG.equals(tag) || entry == null || entry.notification != notification) {
-            if ("cancel".equals(action)) NotificationManagerCompat.from(ApplicationLoader.applicationContext).cancel(tag, notification);
+            if ("cancel".equals(action)) cancelNotification(tag, notification);
             return;
         }
         if ("cancel".equals(action)) {
@@ -1013,19 +1044,10 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         Entry entry = entries.get(name);
         if (entry == null) return;
         if (id == NotificationCenter.fileLoaded) {
-            if (entry.state.blocked() && !entry.state.playback) return;
-            entry.file = args.length > 1 && args[1] instanceof File ? (File) args[1] : entry.source.localFile(account);
-            if (entry.file == null || !entry.file.isFile()) return;
-            entry.state.complete = true;
-            entry.failed = false;
-            entry.progress = 1;
-            if (entry.totalBytes <= 0) entry.totalBytes = entry.file.length();
-            entry.downloadedBytes = entry.totalBytes;
-            if (!entry.state.blocked()) {
-                notifyConsumers(entry);
-                finishExports(entry);
-            }
-            publish(entry, true);
+            File file = args.length > 1 && args[1] instanceof File ? (File) args[1] : null;
+            Utilities.globalQueue.postRunnable(() -> {
+                if (entries.get(name) == entry) complete(entry, file == null ? entry.source.localFile(account) : file);
+            });
         } else if (id == NotificationCenter.fileLoadFailed) {
             if (entry.state.blocked() || args.length > 1 && Integer.valueOf(1).equals(args[1])) return;
             entry.failed = true;
@@ -1041,6 +1063,25 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
             if (total > 0) entry.totalBytes = total;
             entry.progress = total == 0 ? 0 : Math.min(1, entry.downloadedBytes / (float) total);
             publish(entry, false);
+        }
+    }
+
+    private void complete(Entry entry, File file) {
+        if (file == null || !file.isFile()) return;
+        long size = file.length();
+        synchronized (this) {
+            if (entries.get(entry.fileName) != entry || entry.state.complete || entry.state.blocked() && !entry.state.playback) return;
+            entry.file = file;
+            entry.state.complete = true;
+            entry.failed = false;
+            entry.progress = 1;
+            if (entry.totalBytes <= 0) entry.totalBytes = size;
+            entry.downloadedBytes = entry.totalBytes;
+            if (!entry.state.blocked()) {
+                notifyConsumers(entry);
+                finishExports(entry);
+            }
+            publish(entry, true);
         }
     }
 }
