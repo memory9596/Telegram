@@ -605,46 +605,53 @@ public class FileLoader extends BaseController {
         } else {
             fileName = name;
         }
-        LoadOperationUIObject uiObject = loadOperationPathsUI.remove(fileName);
+        LoadOperationUIObject uiObject = loadOperationPathsUI.get(fileName);
         Runnable runnable = uiObject != null ? uiObject.loadInternalRunnable : null;
-        boolean removed = uiObject != null;
         if (runnable != null) {
             fileLoaderQueue.cancelRunnable(runnable);
         }
         fileLoaderQueue.postRunnable(() -> {
-            FileLoadOperation operation = loadOperationPaths.remove(fileName);
-            if (operation != null) {
+            FileLoadOperation operation = loadOperationPaths.get(fileName);
+            // Keep completed downloads registered while their final files are being prepared.
+            if (operation != null && operation.isFinished() && !operation.isPreloadFinished()) {
+                return;
+            }
+            boolean removed = uiObject != null && loadOperationPathsUI.remove(fileName, uiObject);
+            if (operation != null && loadOperationPaths.remove(fileName, operation)) {
                 FileLoaderPriorityQueue queue = operation.getQueue();
                 queue.cancel(operation);
             }
+            if (removed && document != null) {
+                AndroidUtilities.runOnUIThread(() -> {
+                    getNotificationCenter().postNotificationName(NotificationCenter.onDownloadingFilesChanged);
+                });
+            }
         });
-        if (removed && document != null) {
-            AndroidUtilities.runOnUIThread(() -> {
-                getNotificationCenter().postNotificationName(NotificationCenter.onDownloadingFilesChanged);
-            });
-        }
     }
 
     public void cancel(FileLoadOperation operation) {
         if (operation == null) return;
         final String fileName = operation.getFileName();
-        LoadOperationUIObject uiObject = loadOperationPathsUI.remove(fileName);
-        Runnable runnable = uiObject != null ? uiObject.loadInternalRunnable : null;
-        boolean removed = uiObject != null;
-        if (runnable != null) {
-            fileLoaderQueue.cancelRunnable(runnable);
-        }
         fileLoaderQueue.postRunnable(() -> {
-            FileLoadOperation operation2 = loadOperationPaths.remove(fileName);
-            if (operation2 != null) {
+            FileLoadOperation operation2 = loadOperationPaths.get(fileName);
+            if (operation2 != operation || operation2.isFinished() && !operation2.isPreloadFinished()) {
+                return;
+            }
+            LoadOperationUIObject uiObject = loadOperationPathsUI.get(fileName);
+            Runnable runnable = uiObject != null ? uiObject.loadInternalRunnable : null;
+            if (runnable != null) {
+                fileLoaderQueue.cancelRunnable(runnable);
+            }
+            boolean removed = uiObject != null && loadOperationPathsUI.remove(fileName, uiObject);
+            if (loadOperationPaths.remove(fileName, operation2)) {
                 operation2.getQueue().cancel(operation2);
             }
+            if (removed) {
+                AndroidUtilities.runOnUIThread(() -> {
+                    getNotificationCenter().postNotificationName(NotificationCenter.onDownloadingFilesChanged);
+                });
+            }
         });
-        if (removed) {
-            AndroidUtilities.runOnUIThread(() -> {
-                getNotificationCenter().postNotificationName(NotificationCenter.onDownloadingFilesChanged);
-            });
-        }
     }
 
     public void changePriority(int priority, final TLRPC.Document document, final SecureDocument secureDocument, final WebFile webDocument, final TLRPC.FileLocation location, final String locationExt, String name) {

@@ -66,6 +66,7 @@ public class FileLoaderPriorityQueue {
         }
         if (allOperations.remove(operation)) {
             operation.cancel();
+            checkLoadingOperations();
         }
     }
 
