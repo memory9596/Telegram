@@ -108,10 +108,11 @@ public class DefaultThemesPreviewCell extends LinearLayout implements Theme.Colo
                 if (info != null) {
                     Theme.ThemeAccent accent = info.accentsByThemeId.get(theme.id);
                     if (accent == null) {
-                        accent = info.createNewAccent(theme, parentFragment.getCurrentAccount());
+                        accent = info.createNewAccent(theme, parentFragment.getCurrentAccount(), false, settingsIndex);
                     }
                     accentId = accent.id;
                     info.setCurrentAccentId(accentId);
+                    Theme.PatternsLoader.createLoader(true);
                 }
             }
 

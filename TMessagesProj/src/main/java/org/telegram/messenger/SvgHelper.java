@@ -495,12 +495,12 @@ public class SvgHelper {
         }
     }
 
-    public static SvgResult getSvgBitmap(File file, int width, int height, boolean white) {
+    public static SvgResult getSvgBitmap(File file, int width, int height, boolean white, float scale) {
         try (FileInputStream stream = new FileInputStream(file)) {
             SAXParserFactory spf = SAXParserFactory.newInstance();
             SAXParser sp = spf.newSAXParser();
             XMLReader xr = sp.getXMLReader();
-            SVGHandler handler = new SVGHandler(width, height, white ? 0xffffffff : null, false, 1f);
+            SVGHandler handler = new SVGHandler(width, height, white ? 0xffffffff : null, false, scale);
             if (!white) {
                 handler.alphaOnly = true;
             }

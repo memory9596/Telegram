@@ -282,9 +282,9 @@ public class ThemeSmallPreviewView extends FrameLayout implements NotificationCe
             if (themeId != 0) {
                 TLRPC.WallPaper wallPaper = item.chatTheme.getWallpaper(lastThemeIndex);
                 if (wallPaper != null) {
-                    final int intensity = wallPaper.settings.intensity;
+                    final int intensity = wallPaper.settings == null ? 0 : wallPaper.settings.intensity;
                     item.chatTheme.loadWallpaperThumb(lastThemeIndex, result -> {
-                        if (result != null && result.first == themeId) {
+                        if (result != null && result.first == themeId && chatThemeItem == item && item.chatTheme.getWallpaper(lastThemeIndex) == wallPaper) {
                             if (item.previewDrawable instanceof MotionBackgroundDrawable) {
                                 MotionBackgroundDrawable motionBackgroundDrawable = (MotionBackgroundDrawable) item.previewDrawable;
                                 motionBackgroundDrawable.setPatternBitmap(intensity >= 0 ? 100 : -100, prescaleBitmap(result.second), true);
@@ -330,14 +330,14 @@ public class ThemeSmallPreviewView extends FrameLayout implements NotificationCe
                         ImageLoader.getInstance().loadImageForImageReceiver(imageReceiver);
                     }
                 } else if (accent != null && accent.info == null) {
-                    int intensity = (int) (accent.patternIntensity * 100);
+                    int intensity = themeInfo.firstAccentIsDefault && accent.id == Theme.DEFALT_THEME_ACCENT_ID ? 34 : (int) (accent.patternIntensity * 100);
                     if (item.previewDrawable instanceof MotionBackgroundDrawable) {
                         ((MotionBackgroundDrawable) item.previewDrawable).setPatternBitmap(intensity);
                     }
                     ChatThemeController.chatThemeQueue.postRunnable(() -> {
                         Bitmap bitmap = SvgHelper.getBitmap(R.raw.default_pattern, AndroidUtilities.dp(PATTERN_BITMAP_MAXWIDTH), AndroidUtilities.dp(PATTERN_BITMAP_MAXHEIGHT), Color.BLACK, AndroidUtilities.density);
                         AndroidUtilities.runOnUIThread(() -> {
-                            if (item.previewDrawable instanceof MotionBackgroundDrawable) {
+                            if (chatThemeItem == item && item.chatTheme.getThemeInfo(lastThemeIndex) == themeInfo && item.previewDrawable instanceof MotionBackgroundDrawable) {
                                 MotionBackgroundDrawable motionBackgroundDrawable = (MotionBackgroundDrawable) item.previewDrawable;
                                 motionBackgroundDrawable.setPatternBitmap(intensity, prescaleBitmap(bitmap), true);
                                 motionBackgroundDrawable.setPatternColorFilter(patternColor);
