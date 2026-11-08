@@ -937,7 +937,7 @@ public class ImageLoader {
                 SvgHelper.SvgResult svgResult = null;
                 Bitmap bitmap = null;
                 try {
-                    svgResult = SvgHelper.getSvgBitmap(cacheImage.finalFilePath, w, h, cacheImage.imageType == FileLoader.IMAGE_TYPE_SVG_WHITE);
+                    svgResult = SvgHelper.getSvgBitmap(cacheImage.finalFilePath, w, h, cacheImage.imageType == FileLoader.IMAGE_TYPE_SVG_WHITE, 1f);
                     bitmap = svgResult.getBitmap();
                 } catch (Throwable e) {
                     FileLog.e(e);

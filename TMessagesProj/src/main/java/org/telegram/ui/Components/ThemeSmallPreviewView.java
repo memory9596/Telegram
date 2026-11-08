@@ -282,12 +282,12 @@ public class ThemeSmallPreviewView extends FrameLayout implements NotificationCe
             if (themeId != 0) {
                 TLRPC.WallPaper wallPaper = item.chatTheme.getWallpaper(lastThemeIndex);
                 if (wallPaper != null) {
-                    final int intensity = wallPaper.settings.intensity;
+                    final int intensity = wallPaper.settings == null ? 0 : wallPaper.settings.intensity;
                     item.chatTheme.loadWallpaperThumb(lastThemeIndex, result -> {
-                        if (result != null && result.first == themeId) {
+                        if (result != null && result.first == themeId && chatThemeItem == item && item.chatTheme.getWallpaper(lastThemeIndex) == wallPaper) {
                             if (item.previewDrawable instanceof MotionBackgroundDrawable) {
                                 MotionBackgroundDrawable motionBackgroundDrawable = (MotionBackgroundDrawable) item.previewDrawable;
-                                motionBackgroundDrawable.setPatternBitmap(intensity >= 0 ? 100 : -100, prescaleBitmap(result.second), true);
+                                motionBackgroundDrawable.setPatternBitmap(intensity >= 0 ? 100 : -100, prescaleBitmap(result.second), false);
                                 motionBackgroundDrawable.setPatternColorFilter(patternColor);
                             }
                             invalidate();
@@ -321,7 +321,7 @@ public class ThemeSmallPreviewView extends FrameLayout implements NotificationCe
                             if (resultBitmap != null) {
                                 if (item.previewDrawable instanceof MotionBackgroundDrawable) {
                                     MotionBackgroundDrawable motionBackgroundDrawable = (MotionBackgroundDrawable) item.previewDrawable;
-                                    motionBackgroundDrawable.setPatternBitmap(wallPaper.settings == null || wallPaper.settings.intensity >= 0 ? 100 : -100, prescaleBitmap(resultBitmap), true);
+                                    motionBackgroundDrawable.setPatternBitmap(wallPaper.settings == null || wallPaper.settings.intensity >= 0 ? 100 : -100, prescaleBitmap(resultBitmap), false);
                                     motionBackgroundDrawable.setPatternColorFilter(patternColor);
                                     invalidate();
                                 }
@@ -330,16 +330,16 @@ public class ThemeSmallPreviewView extends FrameLayout implements NotificationCe
                         ImageLoader.getInstance().loadImageForImageReceiver(imageReceiver);
                     }
                 } else if (accent != null && accent.info == null) {
-                    int intensity = (int) (accent.patternIntensity * 100);
+                    int intensity = themeInfo.firstAccentIsDefault && accent.id == Theme.DEFALT_THEME_ACCENT_ID ? 34 : (int) (accent.patternIntensity * 100);
                     if (item.previewDrawable instanceof MotionBackgroundDrawable) {
                         ((MotionBackgroundDrawable) item.previewDrawable).setPatternBitmap(intensity);
                     }
                     ChatThemeController.chatThemeQueue.postRunnable(() -> {
                         Bitmap bitmap = SvgHelper.getBitmap(R.raw.default_pattern, AndroidUtilities.dp(PATTERN_BITMAP_MAXWIDTH), AndroidUtilities.dp(PATTERN_BITMAP_MAXHEIGHT), Color.BLACK, AndroidUtilities.density);
                         AndroidUtilities.runOnUIThread(() -> {
-                            if (item.previewDrawable instanceof MotionBackgroundDrawable) {
+                            if (chatThemeItem == item && item.chatTheme.getThemeInfo(lastThemeIndex) == themeInfo && item.previewDrawable instanceof MotionBackgroundDrawable) {
                                 MotionBackgroundDrawable motionBackgroundDrawable = (MotionBackgroundDrawable) item.previewDrawable;
-                                motionBackgroundDrawable.setPatternBitmap(intensity, prescaleBitmap(bitmap), true);
+                                motionBackgroundDrawable.setPatternBitmap(intensity, prescaleBitmap(bitmap), false);
                                 motionBackgroundDrawable.setPatternColorFilter(patternColor);
                                 invalidate();
                             }
@@ -407,7 +407,7 @@ public class ThemeSmallPreviewView extends FrameLayout implements NotificationCe
         if (bitmap == null) {
             return null;
         }
-        float scale = Math.max(AndroidUtilities.dp(PATTERN_BITMAP_MAXWIDTH) / bitmap.getWidth(), AndroidUtilities.dp(PATTERN_BITMAP_MAXHEIGHT) / bitmap.getHeight());
+        float scale = Math.max(AndroidUtilities.dp(PATTERN_BITMAP_MAXWIDTH) / (float) bitmap.getWidth(), AndroidUtilities.dp(PATTERN_BITMAP_MAXHEIGHT) / (float) bitmap.getHeight());
         if (bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0 || Math.abs(scale - 1f) < .0125f) {
             return bitmap;
         }

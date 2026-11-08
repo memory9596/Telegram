@@ -116,10 +116,11 @@ public class EmojiThemes {
         chatTheme.key = ThemeKey.of(tl_theme);
         chatTheme.chatTheme = TLRPC.ChatTheme.ofEmoticon(tl_theme.emoticon);
 
-        for (int i = 0; i < tl_theme.settings.size(); i++) {
+        boolean twoVariants = tl_theme.settings.size() == 2;
+        for (int i = 0; i < (twoVariants ? 4 : tl_theme.settings.size()); i++) {
             ThemeItem theme = new ThemeItem();
             theme.tlTheme = tl_theme;
-            theme.settingsIndex = i;
+            theme.settingsIndex = twoVariants ? i / 2 : i;
             chatTheme.items.add(theme);
         }
         return chatTheme;
@@ -579,9 +580,9 @@ public class EmojiThemes {
             }
             return;
         }
-        Bitmap bitmap = ChatThemeController.getInstance(currentAccount).getWallpaperThumbBitmap(themeId);
-        File file = getWallpaperThumbFile(themeId);
-        if (bitmap == null && file.exists() && file.length() > 0) {
+        Bitmap bitmap = wallpaper.pattern ? null : ChatThemeController.getInstance(currentAccount).getWallpaperThumbBitmap(themeId);
+        File file = wallpaper.pattern ? null : getWallpaperThumbFile(themeId);
+        if (bitmap == null && file != null && file.exists() && file.length() > 0) {
             try {
                 bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
             } catch (Exception e) {
@@ -602,31 +603,35 @@ public class EmojiThemes {
             return;
         }
         final TLRPC.PhotoSize thumbSize = FileLoader.getClosestPhotoSizeWithSize(wallpaper.document.thumbs, 140);
-        ImageLocation imageLocation = ImageLocation.getForDocument(thumbSize, wallpaper.document);
+        ImageLocation imageLocation = wallpaper.pattern && thumbSize == null
+                ? ImageLocation.getForDocument(wallpaper.document)
+                : ImageLocation.getForDocument(thumbSize, wallpaper.document);
         ImageReceiver imageReceiver = new ImageReceiver();
         imageReceiver.setAllowLoadingOnAttachedOnly(false);
-        imageReceiver.setImage(imageLocation, "120_140", null, null, null, 1);
+        imageReceiver.setImage(imageLocation, wallpaper.pattern ? "120_140_" + AndroidUtilities.density + "_pattern" : "120_140", null, null, null, 1);
         imageReceiver.setDelegate((receiver, set, thumb, memCache) -> {
             ImageReceiver.BitmapHolder holder = receiver.getBitmapSafe();
-            if (!set || holder == null || holder.bitmap.isRecycled()) {
+            if (!set || holder == null) {
                 return;
             }
             Bitmap resultBitmap = holder.bitmap;
             if (resultBitmap == null && (holder.drawable instanceof BitmapDrawable)) {
                 resultBitmap = ((BitmapDrawable) holder.drawable).getBitmap();
             }
-            if (resultBitmap != null) {
+            if (resultBitmap != null && !resultBitmap.isRecycled()) {
                 if (callback != null) {
                     callback.onComplete(new Pair<>(themeId, resultBitmap));
                 }
-                final Bitmap saveBitmap = resultBitmap;
-                Utilities.globalQueue.postRunnable(() -> {
-                    try (FileOutputStream outputStream = new FileOutputStream(file)) {
-                        saveBitmap.compress(Bitmap.CompressFormat.PNG, 87, outputStream);
-                    } catch (Exception e) {
-                        FileLog.e(e);
-                    }
-                });
+                if (file != null) {
+                    final Bitmap saveBitmap = resultBitmap;
+                    Utilities.globalQueue.postRunnable(() -> {
+                        try (FileOutputStream outputStream = new FileOutputStream(file)) {
+                            saveBitmap.compress(Bitmap.CompressFormat.PNG, 87, outputStream);
+                        } catch (Exception e) {
+                            FileLog.e(e);
+                        }
+                    });
+                }
             } else {
                 if (callback != null) {
                     callback.onComplete(null);
