@@ -9490,6 +9490,12 @@ public class Theme {
             TLRPC.ThemeSettings settings = null;
             if (accent.info != null && accent.info.settings.size() > 0) {
                 settings = accent.info.settings.get(0);
+                for (TLRPC.ThemeSettings themeSettings : accent.info.settings) {
+                    if (currentTheme.getKey().equals(getBaseThemeKey(themeSettings))) {
+                        settings = themeSettings;
+                        break;
+                    }
+                }
             }
             if (accent.info != null && settings != null && settings.wallpaper != null) {
                 wallpaperDocument = settings.wallpaper.document;

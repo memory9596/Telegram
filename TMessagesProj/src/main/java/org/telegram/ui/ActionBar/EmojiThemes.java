@@ -116,10 +116,11 @@ public class EmojiThemes {
         chatTheme.key = ThemeKey.of(tl_theme);
         chatTheme.chatTheme = TLRPC.ChatTheme.ofEmoticon(tl_theme.emoticon);
 
-        for (int i = 0; i < tl_theme.settings.size(); i++) {
+        boolean twoVariants = tl_theme.settings.size() == 2;
+        for (int i = 0; i < (twoVariants ? 4 : tl_theme.settings.size()); i++) {
             ThemeItem theme = new ThemeItem();
             theme.tlTheme = tl_theme;
-            theme.settingsIndex = i;
+            theme.settingsIndex = twoVariants ? i / 2 : i;
             chatTheme.items.add(theme);
         }
         return chatTheme;
