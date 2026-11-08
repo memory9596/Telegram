@@ -482,15 +482,6 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         publish(entry, true);
     }
 
-    public synchronized void resume(TLRPC.Document document) { resume(find(document)); }
-
-    private synchronized void resume(Entry entry) {
-        if (entry == null || !entry.state.resume(false)) return;
-        entry.failed = false;
-        if (entry.state.complete) { notifyConsumers(entry); finishExports(entry); } else load(entry);
-        publish(entry, true);
-    }
-
     public synchronized void cancel(TLRPC.Document document) {
         if (document != null) cancelledFiles.add(FileLoader.getAttachFileName(document));
         Entry entry = find(document);
@@ -519,7 +510,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         ArrayList<Consumer> consumers = new ArrayList<>(entry.consumers.values());
         entry.consumers.clear();
         entry.state.consumers = 0;
-        for (Export save : entry.saves.values()) save.cancelled.set(true);
+        ArrayList<Export> saves = new ArrayList<>(entry.saves.values());
         entry.saves.clear();
         entry.state.save = false;
         if (entry.share != null) entry.share.cancelled.set(true);
@@ -538,6 +529,7 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
             if (!entry.state.complete) stopTransfer(entry);
             remove(entry);
         }
+        for (Export save : saves) finishExport(save, false);
         for (Consumer consumer : consumers) AndroidUtilities.runOnUIThread(consumer.callback::onCancelled);
     }
 
@@ -577,15 +569,6 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         cancelExternalOwners(entry);
         entry.state.external = false;
         if (!entry.state.hasWork()) remove(entry); else publish(entry, true);
-    }
-
-    public synchronized boolean hasExport(TLRPC.Document document, FileExport.Target target) {
-        Entry entry = find(document);
-        return entry != null && entry.saves.containsKey(target);
-    }
-
-    public synchronized void cancelExport(TLRPC.Document document, FileExport.Target target) {
-        cancelExport(find(document), target);
     }
 
     public synchronized void cancelExport(FileDownloadSource source, FileExport.Target target) {
@@ -1028,7 +1011,15 @@ public final class FileDownloadTasks implements NotificationCenter.NotificationC
         if ("cancel".equals(action)) {
             boolean externalReady = entry.state.complete && entry.state.external && entry.saves.isEmpty()
                     && entry.consumers.isEmpty() && entry.share == null && !entry.failed;
-            if (externalReady) cancelExternal(entry); else cancelPersistent(entry, entry.document);
+            if (externalReady) {
+                cancelExternal(entry);
+            } else if (entry.state.independentDownload && entry.message != null) {
+                ArrayList<MessageObject> messages = new ArrayList<>(1);
+                messages.add(entry.message);
+                DownloadController.getInstance(account).cancelDownloadingFiles(messages);
+            } else {
+                cancelPersistent(entry, entry.document);
+            }
         }
     }
 
