@@ -3309,7 +3309,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             runShadowAnimation(0, false);
         } else {
             lastOffset = Integer.MAX_VALUE;
-            runShadowAnimation(0, true);
+            runShadowAnimation(0, listView.canScrollVertically(-1));
         }
 
         if (topicsGridView.getVisibility() == View.VISIBLE) {
@@ -3334,7 +3334,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
                 runShadowAnimation(0, false);
             } else {
                 lastOffset = Integer.MAX_VALUE;
-                runShadowAnimation(0, true);
+                runShadowAnimation(0, listView.canScrollVertically(-1));
             }
             newOffset = AndroidUtilities.lerp(newOffset, topicsNewOffset, topicsGridView.getAlpha());
         }
