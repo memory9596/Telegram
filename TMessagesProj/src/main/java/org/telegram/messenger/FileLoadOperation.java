@@ -276,7 +276,7 @@ public class FileLoadOperation {
     private File cacheFileFinal;
     private File cacheIvTemp;
     private File cacheFileParts;
-    private boolean cacheFileFinalReady;
+    private volatile boolean cacheFileFinalReady;
 
     private String ext;
     private RandomAccessFile fileOutputStream;
@@ -712,11 +712,7 @@ public class FileLoadOperation {
         final CountDownLatch countDownLatch = new CountDownLatch(1);
         final File[] result = new File[1];
         Utilities.stageQueue.postRunnable(() -> {
-            if (state == stateFinished && !preloadFinished) {
-                result[0] = cacheFileFinal;
-            } else {
-                result[0] = cacheFileTemp;
-            }
+            result[0] = getCurrentFileFast();
             countDownLatch.countDown();
         });
         try {
@@ -788,15 +784,24 @@ public class FileLoadOperation {
                 FileLog.e(e);
                 result[0] = 0;
             }
-            if (state == stateFinished) {
-                result[1] = 1;
+            if (state == stateFailed || state == stateCanceled) {
+                result[0] = 0;
+                // A live stream may rebind after another consumer cancels its operation.
+                result[1] = state == stateCanceled ? -2 : -1;
+            } else if (state == stateFinished && !preloadFinished) {
+                if (cacheFileFinalReady) {
+                    result[1] = 1;
+                } else {
+                    result[0] = 0;
+                }
             }
             countDownLatch.countDown();
         });
         try {
             countDownLatch.await();
-        } catch (Exception ignore) {
-
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new long[]{0, -1};
         }
         return result;
     }
@@ -1073,7 +1078,7 @@ public class FileLoadOperation {
             if (!delegate.hasAnotherRefOnFile(cacheFileFinal.toString())) {
                 cacheFileFinal.delete();
             }
-            finalFileExist = false;
+            finalFileExist = cacheFileFinalReady = false;
         }
 
 
@@ -1488,8 +1493,9 @@ public class FileLoadOperation {
 
     private void cancelRequests(Runnable fullyCancelled) {
         FileLog.d("cancelRequests" + (fullyCancelled != null ? " with callback" : ""));
+        // Keep registration pending until all cancellation callbacks have been installed.
+        int[] waitingForCancelledCount = new int[]{1};
         if (requestInfos != null) {
-            int[] waitingForCancelledCount = new int[1];
             int[] waitingDownloadSize = new int[ConnectionsManager.DownloadConnectionsCount];
             for (int a = 0; a < requestInfos.size(); a++) {
                 RequestInfo requestInfo = requestInfos.get(a);
@@ -1527,6 +1533,9 @@ public class FileLoadOperation {
                     ConnectionsManager.getInstance(currentAccount).discardConnection(datacenterId, connectionType);
                 }
             }
+        }
+        if (--waitingForCancelledCount[0] == 0 && fullyCancelled != null) {
+            fullyCancelled.run();
         }
     }
 
@@ -1712,6 +1721,9 @@ public class FileLoadOperation {
                                 FileLog.e(e);
                             }
                         }
+                        if (!renameResult && !cacheFileTempLocal.exists() && cacheFileFinal.exists()) {
+                            renameResult = true;
+                        }
                         if (!renameResult && renameRetryCount == 3) {
                             try {
                                 renameResult = AndroidUtilities.copyFile(cacheFileTempLocal, cacheFileFinal);
@@ -1741,7 +1753,6 @@ public class FileLoadOperation {
                             cacheFileFinal = cacheFileTempLocal;
                             cacheFileFinalReady = false;
                         } else {
-                            cacheFileFinalReady = true;
                             if (pathSaveData != null && cacheFileFinal.exists()) {
                                 delegate.saveFilePath(pathSaveData, cacheFileFinal);
                             }
@@ -1754,6 +1765,12 @@ public class FileLoadOperation {
                     }
                 }
                 Utilities.stageQueue.postRunnable(() -> {
+                    if (cacheFileFinal == null || !cacheFileFinal.exists()) {
+                        onFail(false, 0);
+                        return;
+                    }
+                    cacheFileFinalReady = true;
+                    notifyStreamListeners();
                     if (BuildVars.LOGS_ENABLED) {
                         FileLog.d("finished downloading file to " + cacheFileFinal + " time = " + (System.currentTimeMillis() - startTime) + " dc = " + datacenterId + " size = " + AndroidUtilities.formatFileSize(totalBytesCount));
                     }
