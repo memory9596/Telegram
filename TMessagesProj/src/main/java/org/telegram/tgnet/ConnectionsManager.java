@@ -1513,6 +1513,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static long lastPremiumFloodWaitShown = 0;
+    public static boolean premiumFloodWaitBulletinsEnabled = false;
     @Keep
     public static void onPremiumFloodWait(final int currentAccount, final int requestToken, boolean isUpload) {
         AndroidUtilities.runOnUIThread(() -> {

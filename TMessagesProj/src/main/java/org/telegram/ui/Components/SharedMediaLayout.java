@@ -11691,7 +11691,7 @@ public class SharedMediaLayout extends FrameLayout implements Theme.Colorable, N
     }
 
     public void showPremiumFloodWaitBulletin(final boolean isUpload) {
-        if (profileActivity == null) return;
+        if (!ConnectionsManager.premiumFloodWaitBulletinsEnabled || profileActivity == null) return;
 
 //        final long now = System.currentTimeMillis();
 //        if (now - ConnectionsManager.lastPremiumFloodWaitShown < 1000L * MessagesController.getInstance(currentAccount).uploadPremiumSpeedupNotifyPeriod) {

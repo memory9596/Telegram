@@ -45214,6 +45214,7 @@ public class ChatActivity extends BaseFragment implements
     }
 
     public void showPremiumFloodWaitBulletin(final boolean isUpload) {
+        if (!ConnectionsManager.premiumFloodWaitBulletinsEnabled) return;
         final long now = System.currentTimeMillis();
         if (now - ConnectionsManager.lastPremiumFloodWaitShown < 1000L * MessagesController.getInstance(currentAccount).uploadPremiumSpeedupNotifyPeriod) {
             return;
