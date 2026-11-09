@@ -1022,6 +1022,17 @@ public class FileLoader extends BaseController {
 
         String storeFileName = fileName;
 
+        // A cached preview can read the completed document in its media directory.
+        if (cacheType == ImageLoader.CACHE_TYPE_CACHE && stream != null && document != null && document.key == null) {
+            String path = getFileDatabase().getPath(documentId, dcId, type, true);
+            File file = path == null ? new File(getDirectory(type), fileName) : new File(path);
+            if (!file.isFile()) file = new File(getDirectory(type), fileName);
+            if (document.size > 0 && file.getParentFile() != null && file.isFile() && file.length() == document.size) {
+                storeDir = file.getParentFile();
+                storeFileName = file.getName();
+            }
+        }
+
         if (cacheType == 0 || cacheType == 10 || isStory) {
             if (documentId != 0) {
                 String path = getFileDatabase().getPath(documentId, dcId, type, true);
