@@ -3334,6 +3334,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
         int x = (int) getEventX(event);
         int y = (int) getEventY(event);
+        boolean videoButtonHit = drawVideoImageButton && buttonState != -1 && x >= videoButtonX && x <= videoButtonX + dp(26 + 8) + Math.max(infoWidth, docTitleWidth) && y >= videoButtonY && y <= videoButtonY + dp(30);
+        if (videoButtonPressed != 0 && !videoButtonHit) {
+            videoButtonPressed = 0;
+            invalidate();
+        }
 
         boolean result = false;
         if (event.getAction() == MotionEvent.ACTION_DOWN) {
@@ -3353,7 +3358,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 buttonPressed = 1;
                 invalidate();
                 result = true;
-            } else if (drawVideoImageButton && buttonState != -1 && x >= videoButtonX && x <= videoButtonX + dp(26 + 8) + Math.max(infoWidth, docTitleWidth) && y >= videoButtonY && y <= videoButtonY + dp(30) && allowClickButtons) {
+            } else if (videoButtonHit && allowClickButtons) {
                 videoButtonPressed = 1;
                 invalidate();
                 result = true;
@@ -4358,6 +4363,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) lastTouchDownTime = event.getDownTime();
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            videoButtonPressed = 0;
+        }
         if (currentMessageObject == null || delegate != null && !delegate.canPerformActions() || animationRunning) {
             if (currentMessageObject != null && currentMessageObject.richLayout != null
                     && (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL)) {
@@ -6570,6 +6578,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             buttonPressed = 0;
             additionalTimeOffsetY = 0;
             miniButtonPressed = 0;
+            videoButtonPressed = 0;
             pressedBotButton = -1;
             pressedVoteButton = -1;
             pollHintPressed = false;
