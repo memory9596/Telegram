@@ -1124,8 +1124,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private int waitingForDraw;
     public TextureView changedTextureView;
     private ImageView textureImageView;
-    private ImageView[] fullscreenButton = new ImageView[3];
-    private boolean allowShowFullscreenButton;
+    private ImageView fullscreenButton;
     private int[] pipPosition = new int[2];
     private boolean pipAnimationInProgress;
     private Bitmap currentBitmap;
@@ -3524,6 +3523,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
     private class VideoPlayerControlFrameLayout extends FrameLayout {
 
+        private static final int CONTROL_SPACING_DP = 14;
+        private static final int TIME_END_MARGIN_DP = 12;
+
         private float progress = 1f;
         private boolean seekBarTransitionEnabled;
         private boolean translationYAnimationEnabled = true;
@@ -3538,14 +3540,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                         .setStiffness(750f)
                         .setDampingRatio(SpringForce.DAMPING_RATIO_NO_BOUNCY))
                 .addUpdateListener((animation, value, velocity) -> {
-                    int extraWidth;
-                    if (parentWidth > parentHeight) {
-                        extraWidth = dp(48);
-                    } else {
-                        extraWidth = 0;
-                    }
-
-                    videoPlayerSeekbar.setSize((int) (getMeasuredWidth() - dp(2 + 14) - value - extraWidth), getMeasuredHeight());
+                    videoPlayerSeekbar.setSize(getSeekBarWidth(value), getMeasuredHeight());
                 });
 
         public VideoPlayerControlFrameLayout(@NonNull Context context) {
@@ -3582,24 +3577,31 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             super.requestLayout();
         }
 
+        private int getSeekBarWidth(float timeWidth) {
+            LayoutParams layoutParams = (LayoutParams) videoPlayerTime.getLayoutParams();
+            // Move the seek bar by the same amount as the time to preserve their original gap.
+            int timeOffset = layoutParams.rightMargin - dp(TIME_END_MARGIN_DP);
+            return (int) (getMeasuredWidth() - dp(2 + CONTROL_SPACING_DP) - timeWidth - timeOffset);
+        }
+
         @Override
         protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int extraWidth;
             ignoreLayout = true;
             LayoutParams layoutParams = (LayoutParams) videoPlayerTime.getLayoutParams();
+            fullscreenButton.setVisibility(parentWidth < parentHeight && canShowFullscreenButton() ? VISIBLE : INVISIBLE);
             if (parentWidth > parentHeight) {
                 if (exitFullscreenButton.getVisibility() != VISIBLE) {
                     exitFullscreenButton.setVisibility(VISIBLE);
                 }
-                extraWidth = dp(48);
-                layoutParams.rightMargin = dp(47);
             } else {
                 if (exitFullscreenButton.getVisibility() != INVISIBLE) {
                     exitFullscreenButton.setVisibility(INVISIBLE);
                 }
-                extraWidth = 0;
-                layoutParams.rightMargin = dp(12);
             }
+            boolean hasFullscreenButton = fullscreenButton.getVisibility() == VISIBLE || exitFullscreenButton.getVisibility() == VISIBLE;
+            // The centered 24dp drawables contain 20dp and 16dp visible icons, respectively.
+            int iconWidth = dp(fullscreenButton.getVisibility() == VISIBLE ? 20 : 16);
+            layoutParams.rightMargin = hasFullscreenButton ? dp(24) + iconWidth / 2 + dp(CONTROL_SPACING_DP) : dp(TIME_END_MARGIN_DP);
             ignoreLayout = false;
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
             long duration;
@@ -3628,7 +3630,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 timeSpring.getSpring().setFinalPosition(size);
                 timeSpring.start();
             } else {
-                videoPlayerSeekbar.setSize(getMeasuredWidth() - dp(2 + 14) - size - extraWidth, getMeasuredHeight());
+                videoPlayerSeekbar.setSize(getSeekBarWidth(size), getMeasuredHeight());
                 timeValue.setValue(size);
             }
             lastTimeWidth = size;
@@ -3660,6 +3662,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
         private void onProgressChanged(float progress) {
             videoPlayerTime.setAlpha(progress);
+            fullscreenButton.setAlpha(progress);
             exitFullscreenButton.setAlpha(progress);
             if (seekBarTransitionEnabled) {
                 videoPlayerTime.setPivotX(videoPlayerTime.getWidth());
@@ -6052,35 +6055,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 return placeProvider != null && placeProvider.forceAllInGroup();
             }
         });
-
-        for (int a = 0; a < 3; a++) {
-            fullscreenButton[a] = new ImageView(parentActivity);
-            fullscreenButton[a].setImageResource(R.drawable.msg_maxvideo);
-            fullscreenButton[a].setContentDescription(getString("AccSwitchToFullscreen", R.string.AccSwitchToFullscreen));
-            fullscreenButton[a].setScaleType(ImageView.ScaleType.CENTER);
-            fullscreenButton[a].setBackground(Theme.createSelectorDrawable(Theme.ACTION_BAR_WHITE_SELECTOR_COLOR));
-            fullscreenButton[a].setVisibility(View.INVISIBLE);
-            fullscreenButton[a].setAlpha(1.0f);
-            containerView.addView(fullscreenButton[a], LayoutHelper.createFrame(48, 48));
-            fullscreenButton[a].setOnClickListener(v -> {
-                if (parentActivity == null) {
-                    return;
-                }
-                wasRotated = false;
-                fullscreenedByButton = 1;
-                if (prevOrientation == -10) {
-                    prevOrientation = parentActivity.getRequestedOrientation();
-                }
-                WindowManager manager = (WindowManager) parentActivity.getSystemService(Activity.WINDOW_SERVICE);
-                int displayRotation = manager.getDefaultDisplay().getRotation();
-                if (displayRotation == Surface.ROTATION_270) {
-                    parentActivity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
-                } else {
-                    parentActivity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-                }
-                toggleActionBar(false, false);
-            });
-        }
 
         textSelectionHelper = new TextSelectionHelper.SimpleTextSelectionHelper(null, new DarkThemeResourceProvider()) {
             @Override
@@ -9667,6 +9641,32 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         videoPlayerTime.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         videoPlayerControlFrameLayout.addView(videoPlayerTime, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.RIGHT | Gravity.TOP, 0, 15, 12, 0));
 
+        fullscreenButton = new ImageView(containerView.getContext());
+        fullscreenButton.setImageResource(R.drawable.msg_maxvideo);
+        fullscreenButton.setContentDescription(getString("AccSwitchToFullscreen", R.string.AccSwitchToFullscreen));
+        fullscreenButton.setScaleType(ImageView.ScaleType.CENTER);
+        fullscreenButton.setBackground(Theme.createSelectorDrawable(Theme.ACTION_BAR_WHITE_SELECTOR_COLOR));
+        fullscreenButton.setVisibility(View.INVISIBLE);
+        videoPlayerControlFrameLayout.addView(fullscreenButton, LayoutHelper.createFrame(48, 48, Gravity.TOP | Gravity.RIGHT));
+        fullscreenButton.setOnClickListener(v -> {
+            if (parentActivity == null) {
+                return;
+            }
+            wasRotated = false;
+            fullscreenedByButton = 1;
+            if (prevOrientation == -10) {
+                prevOrientation = parentActivity.getRequestedOrientation();
+            }
+            WindowManager manager = (WindowManager) parentActivity.getSystemService(Activity.WINDOW_SERVICE);
+            int displayRotation = manager.getDefaultDisplay().getRotation();
+            if (displayRotation == Surface.ROTATION_270) {
+                parentActivity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
+            } else {
+                parentActivity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+            }
+            toggleActionBar(false, false);
+        });
+
         exitFullscreenButton = new ImageView(containerView.getContext());
         exitFullscreenButton.setImageResource(R.drawable.msg_minvideo);
         exitFullscreenButton.setContentDescription(getString("AccExitFullscreen", R.string.AccExitFullscreen));
@@ -10803,75 +10803,40 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     public void checkFullscreenButton() {
-        if (imagesArr.isEmpty() || currentMessageObject != null && currentMessageObject.isSponsored()) {
-            for (int b = 0; b < 3; b++) {
-                fullscreenButton[b].setVisibility(View.INVISIBLE);
-            }
+        if (fullscreenButton == null) {
             return;
         }
-        for (int b = 0; b < 3; b++) {
-            int index = currentIndex;
-            if (b == 1) {
-                index += 1;
-            } else if (b == 2) {
-                index -= 1;
-            }
-            if (index < 0 || index >= imagesArr.size()) {
-                fullscreenButton[b].setVisibility(View.INVISIBLE);
-                continue;
-            }
-            MessageObject messageObject = imagesArr.get(index);
-            if (!messageObject.isVideo() && !messageObject.isYouTubeVideo()) {
-                fullscreenButton[b].setVisibility(View.INVISIBLE);
-                continue;
-            }
-            boolean isYouTube = messageObject.isYouTubeVideo() && currentMessageObject != null && currentMessageObject.getId() == messageObject.getId();
-            int w = isYouTube ? messageObject.messageOwner.media.webpage.embed_width : b == 0 && videoTextureView != null ? videoTextureView.getMeasuredWidth() : 0;
-            int h = isYouTube ? messageObject.messageOwner.media.webpage.embed_height : b == 0 && videoTextureView != null ? videoTextureView.getMeasuredHeight() : 0;
-            TLRPC.Document document = messageObject.getDocument();
-            if (document != null) {
-                for (int a = 0, N = document.attributes.size(); a < N; a++) {
-                    TLRPC.DocumentAttribute attribute = document.attributes.get(a);
-                    if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
-                        w = attribute.w;
-                        h = attribute.h;
-                        break;
-                    }
-                }
-            }
-            if (AndroidUtilities.displaySize.y > AndroidUtilities.displaySize.x && w > h) {
-                if (fullscreenButton[b].getVisibility() != View.VISIBLE) {
-                    fullscreenButton[b].setVisibility(View.VISIBLE);
-                }
-                if (isActionBarVisible) {
-                    fullscreenButton[b].setAlpha(1f);
-                }
-                float scale = w / (float) containerView.getMeasuredWidth();
-                int height = (int) (h / scale);
-                FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) fullscreenButton[b].getLayoutParams();
-                layoutParams.topMargin = (containerView.getMeasuredHeight() + height) / 2 - dp(48);
-            } else {
-                if (fullscreenButton[b].getVisibility() != View.INVISIBLE) {
-                    fullscreenButton[b].setVisibility(View.INVISIBLE);
-                }
-            }
-
-            float currentTranslationX;
-            if (imageMoveAnimation != null) {
-                currentTranslationX = translationX + (animateToX - translationX) * animationValue;
-            } else {
-                currentTranslationX = translationX;
-            }
-            float offsetX;
-            if (b == 1) {
-                offsetX = 0;
-            } else if (b == 2) {
-                offsetX = -AndroidUtilities.displaySize.x - dp(15) + (currentTranslationX - maxX);
-            } else {
-                offsetX = currentTranslationX < minX ? (currentTranslationX - minX) : 0;
-            }
-            fullscreenButton[b].setTranslationX(offsetX + AndroidUtilities.displaySize.x - dp(48));
+        boolean visible = AndroidUtilities.displaySize.y > AndroidUtilities.displaySize.x && canShowFullscreenButton();
+        int visibility = visible ? View.VISIBLE : View.INVISIBLE;
+        if (fullscreenButton.getVisibility() != visibility) {
+            fullscreenButton.setVisibility(visibility);
+            videoPlayerControlFrameLayout.requestLayout();
         }
+    }
+
+    private boolean canShowFullscreenButton() {
+        if (currentIndex < 0 || currentIndex >= imagesArr.size() || currentMessageObject != null && currentMessageObject.isSponsored()) {
+            return false;
+        }
+        MessageObject messageObject = imagesArr.get(currentIndex);
+        if (!messageObject.isVideo() && !messageObject.isYouTubeVideo()) {
+            return false;
+        }
+        boolean isYouTube = messageObject.isYouTubeVideo() && currentMessageObject != null && currentMessageObject.getId() == messageObject.getId();
+        int w = isYouTube ? messageObject.messageOwner.media.webpage.embed_width : videoTextureView != null ? videoTextureView.getMeasuredWidth() : 0;
+        int h = isYouTube ? messageObject.messageOwner.media.webpage.embed_height : videoTextureView != null ? videoTextureView.getMeasuredHeight() : 0;
+        TLRPC.Document document = messageObject.getDocument();
+        if (document != null) {
+            for (int a = 0, N = document.attributes.size(); a < N; a++) {
+                TLRPC.DocumentAttribute attribute = document.attributes.get(a);
+                if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
+                    w = attribute.w;
+                    h = attribute.h;
+                    break;
+                }
+            }
+        }
+        return w > h;
     }
 
     private void createVideoTextureView(MediaController.SavedFilterState savedFilterState) {
@@ -13407,17 +13372,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             } else {
                 actionBar.setTranslationY(0);
             }
-            if (allowShowFullscreenButton) {
-                arrayList.add(ObjectAnimator.ofFloat(fullscreenButton[0], View.ALPHA, show ? 1.0f : 0.0f));
-            }
-            for (int a = 1; a < 3; a++) {
-                fullscreenButton[a].setTranslationY(show ? 0 : offsetY);
-            }
-            if (params.enableTranslationAnimation) {
-                arrayList.add(ObjectAnimator.ofFloat(fullscreenButton[0], View.TRANSLATION_Y, show ? 0 : offsetY));
-            } else {
-                fullscreenButton[0].setTranslationY(0);
-            }
             if (bottomLayout != null) {
                 arrayList.add(ObjectAnimator.ofFloat(bottomLayout, View.ALPHA, show ? 1.0f : 0.0f));
                 if (params.enableTranslationAnimation) {
@@ -13504,14 +13458,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             actionBarAnimator.start();
         } else {
             actionBar.setAlpha(show && (getCaptionView() != topCaptionEdit || topCaptionEdit.keyboardNotifier.keyboardVisible()) ? 1.0f : 0.0f);
-            if (fullscreenButton[0].getTranslationX() != 0) {
-                if (allowShowFullscreenButton) {
-                    fullscreenButton[0].setAlpha(show ? 1.0f : 0.0f);
-                }
-            }
-            for (int a = 0; a < 3; a++) {
-                fullscreenButton[a].setTranslationY(show ? 0 : offsetY);
-            }
             actionBar.setTranslationY(show ? 0 : -offsetY);
             if (countView != null) {
                 countView.setAlpha(show ? 1.0f : 0.0f);
@@ -16031,11 +15977,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 photoProgressViews[0] = photoProgressViews[2];
                 photoProgressViews[2] = tempProgress;
 
-                ImageView tmp = fullscreenButton[0];
-                fullscreenButton[0] = fullscreenButton[2];
-                fullscreenButton[2] = tmp;
-                fullscreenButton[0].setTranslationY(tmp.getTranslationY());
-
                 leftCropState = null;
                 setIndexToPaintingOverlay(currentIndex - 1, leftPaintingOverlay);
                 setIndexToPaintingOverlay(currentIndex, paintingOverlay);
@@ -16071,11 +16012,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 PhotoProgressView tempProgress = photoProgressViews[0];
                 photoProgressViews[0] = photoProgressViews[1];
                 photoProgressViews[1] = tempProgress;
-
-                ImageView tmp = fullscreenButton[0];
-                fullscreenButton[0] = fullscreenButton[1];
-                fullscreenButton[1] = tmp;
-                fullscreenButton[0].setTranslationY(tmp.getTranslationY());
 
                 rightCropState = null;
                 setIndexToPaintingOverlay(currentIndex - 1, leftPaintingOverlay);
@@ -16162,30 +16098,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                             final float translationY = captionTextViewSwitcher.getTranslationY();
 
                             boolean buttonVisible = scrollY == 0 && translationY == 0;
-                            boolean enalrgeIconVisible = scrollY == 0 && translationY == 0;
 
                             if (!buttonVisible) {
                                 final int progressBottom = photoProgressViews[0].getY() + photoProgressViews[0].size;
                                 final int topMargin = (isStatusBarVisible() ? AndroidUtilities.statusBarHeight : 0) + ActionBar.getCurrentActionBarHeight();
                                 final int captionTop = captionContainer.getTop() + (int) translationY - scrollY + topMargin - dp(12);
-                                final int enlargeIconTop = (int) fullscreenButton[0].getY();
-                                enalrgeIconVisible = captionTop > enlargeIconTop + dp(32);
                                 buttonVisible = captionTop > progressBottom;
-                            }
-                            if (allowShowFullscreenButton) {
-                                if (fullscreenButton[0].getTag() != null && ((Integer) fullscreenButton[0].getTag()) == 3 && enalrgeIconVisible) {
-                                    fullscreenButton[0].setTag(2);
-                                    fullscreenButton[0].animate().alpha(1).setDuration(150).setListener(new AnimatorListenerAdapter() {
-                                        @Override
-                                        public void onAnimationEnd(Animator animation) {
-                                            fullscreenButton[0].setTag(null);
-                                        }
-                                    }).start();
-                                } else if (fullscreenButton[0].getTag() == null && !enalrgeIconVisible) {
-                                    fullscreenButton[0].setTag(3);
-                                    fullscreenButton[0].animate().alpha(0).setListener(null).setDuration(150).start();
-                                }
-
                             }
                             photoProgressViews[0].setIndexedAlpha(2, buttonVisible ? 1f : 0f, true);
                         }
@@ -17549,7 +17467,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         doneButtonPressed = false;
         closePhotoAfterSelect = true;
         closePhotoAfterSelectWithAnimation = false;
-        allowShowFullscreenButton = true;
         usedSurfaceView = false;
         parentChatActivity = chatActivity;
         lastTitle = null;
@@ -19786,32 +19703,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             photoViewerWebView.setTranslationY(currentTranslationY);
         }
 
-        if (isActionBarVisible) {
-            if (currentScale <= 1.0001f) {
-                if (!allowShowFullscreenButton && fullscreenButton[0].getTag() == null) {
-                    fullscreenButton[0].animate().alpha(1.0f).setDuration(120).setListener(new AnimatorListenerAdapter() {
-                        @Override
-                        public void onAnimationEnd(Animator animation) {
-                            fullscreenButton[0].setTag(null);
-                        }
-                    }).start();
-                    fullscreenButton[0].setTag(1);
-                    allowShowFullscreenButton = true;
-                }
-            } else {
-                if (allowShowFullscreenButton) {
-                    fullscreenButton[0].animate().alpha(0.0f).setDuration(120).setListener(new AnimatorListenerAdapter() {
-                        @Override
-                        public void onAnimationEnd(Animator animation) {
-                            fullscreenButton[0].setTag(null);
-                        }
-                    }).start();
-                    fullscreenButton[0].setTag(1);
-                    allowShowFullscreenButton = false;
-                }
-            }
-        }
-
         int containerWidth = getContainerViewWidth();
         int containerHeight = getContainerViewHeight();
         if (videoSizeSet && aspectRatioFrameLayout != null && aspectRatioFrameLayout.getVisibility() == View.VISIBLE) {
@@ -19840,18 +19731,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 }
             }
             changingPage = sideImage != null;
-        }
-
-        for (int a = 0; a < 3; a++) {
-            float offsetX;
-            if (a == 1) {
-                offsetX = 0;
-            } else if (a == 2) {
-                offsetX = -containerView.getMeasuredWidth() - dp(15) + (currentTranslationX - maxX);
-            } else {
-                offsetX = currentTranslationX < minX ? (currentTranslationX - minX) : 0;
-            }
-            fullscreenButton[a].setTranslationX(offsetX + containerView.getMeasuredWidth() - dp(48));
         }
 
         if (sideImage == rightImage) {
@@ -19920,16 +19799,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 photoProgressViews[1].setScale(1.0f - scaleDiff);
                 photoProgressViews[1].setAlpha(alpha);
                 photoProgressViews[1].onDraw(canvas);
-
-                if (isActionBarVisible) {
-                    fullscreenButton[1].setAlpha(alpha);
-                }
-
                 canvas.restore();
-            }
-        } else {
-            if (isActionBarVisible) {
-                fullscreenButton[1].setAlpha(0.0f);
             }
         }
 
@@ -20352,15 +20222,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 photoProgressViews[2].setScale(1.0f);
                 photoProgressViews[2].setAlpha(1.0f);
                 photoProgressViews[2].onDraw(canvas);
-
-                if (isActionBarVisible) {
-                    fullscreenButton[2].setAlpha(1.0f);
-                }
                 canvas.restore();
-            }
-        } else {
-            if (isActionBarVisible) {
-                fullscreenButton[2].setAlpha(0.0f);
             }
         }
 
@@ -20538,11 +20400,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 photoProgressViews[0].setScale(1.0f);
                 photoProgressViews[0].setAlpha(progressAlpha);
                 photoProgressViews[0].onDraw(canvas);
-
-                if (isActionBarVisible && allowShowFullscreenButton && fullscreenButton[0].getTag() == null) {
-                    fullscreenButton[0].setAlpha(Math.min(fullscreenButton[0].getAlpha(), alpha));
-                }
-
                 canvas.restore();
             }
         }
