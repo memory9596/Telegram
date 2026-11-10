@@ -65,6 +65,7 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecUtil;
 import androidx.media3.exoplayer.source.LoopingMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
+import androidx.media3.exoplayer.source.chunk.MediaChunkIterator;
 import androidx.media3.common.TrackGroup;
 import androidx.media3.exoplayer.source.TrackGroupArray;
 import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
@@ -907,7 +908,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         }
         videoQualityToSelect = quality;
         if (quality == null) { // AUTO
-            final Uri hlsManifest = makeManifest(videoQualities);
+            final Uri hlsManifest = currentStreamIsHls ? null : makeManifest(videoQualities);
             final Quality original = getOriginalQuality();
             if (original != null) for (VideoUri uri : original.uris) uri.updateCached(true);
             if (original != null && original.uris.size() == 1 && original.uris.get(0).isCached()) {
@@ -917,7 +918,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 videoQualityToSelect = quality;
                 player.setMediaSource(mediaSourceFromUri(quality.getDownloadUri(), "other"), false);
                 reset = true;
-            } else if (hlsManifest != null) {
+            } else if (currentStreamIsHls || hlsManifest != null) {
                 autoIsOriginal = false;
                 trackSelector.setParameters(trackSelector.getParameters().buildUpon().clearOverrides().build());
                 if (!currentStreamIsHls) {
@@ -940,10 +941,11 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             if (quality.uris.isEmpty()) return;
             VideoUri downloadUri = quality.getDownloadUri();
             Uri hlsManifest = null;
-            if (allowAutoQuality && quality.uris.size() > 1 && !downloadUri.isCached()) {
+            boolean useHls = allowAutoQuality && quality.uris.size() > 1 && !downloadUri.isCached();
+            if (useHls && !currentStreamIsHls) {
                 hlsManifest = makeManifest(videoQualities);
             }
-            if (hlsManifest == null || quality.uris.size() == 1 || trackSelector.getCurrentMappedTrackInfo() == null) {
+            if (!useHls || !currentStreamIsHls && hlsManifest == null || trackSelector.getCurrentMappedTrackInfo() == null) {
                 currentStreamIsHls = false;
                 player.setMediaSource(mediaSourceFromUri(downloadUri, "other"), false);
                 reset = true;
@@ -1211,6 +1213,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     }
 
     public Uri makeManifest(ArrayList<Quality> qualities) {
+        if (qualities == null || qualities.isEmpty()) return null;
         final StringBuilder sb = new StringBuilder();
         sb.append("#EXTM3U\n");
         sb.append("#EXT-X-VERSION:6\n");
@@ -1220,6 +1223,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         ArrayList<String> streams = new ArrayList<>();
         for (Quality q : qualities) {
             for (VideoUri v : q.uris) {
+                v.updateCached(true);
                 mediaDataSourceFactory.putDocumentUri(v.docId, v.uri);
                 mediaDataSourceFactory.putDocumentUri(v.manifestDocId, v.m3u8uri);
                 if (v.m3u8uri != null) {
@@ -1248,6 +1252,28 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         }
         if (!hasManifests) return null;
         Collections.reverse(streams);
+        Collections.reverse(manifestUris);
+        int initialIndex = videoQualityToSelect == null ? -1 : manifestUris.indexOf(videoQualityToSelect.getDownloadUri());
+        if (initialIndex < 0) {
+            Format[] formats = new Format[manifestUris.size()];
+            int[] tracks = new int[formats.length];
+            for (int i = 0; i < formats.length; i++) {
+                VideoUri uri = manifestUris.get(i);
+                formats[i] = new Format.Builder().setWidth(uri.width).setHeight(uri.height)
+                        .setPeakBitrate((int) Math.floor(uri.bitrate * 8)).setSampleMimeType(toMime(uri.codec))
+                        .setCached(uri.isCached() && uri.isManifestCached()).build();
+                tracks[i] = i;
+            }
+            // HLS preparation reads the first variant. Use the playback selector's initial
+            // policy here as well, rather than always preparing the lowest-quality variant.
+            AdaptiveTrackSelection initialSelection = new AdaptiveTrackSelection(new TrackGroup(formats), tracks,
+                    DefaultBandwidthMeter.getSingletonInstance(ApplicationLoader.applicationContext));
+            initialSelection.updateSelectedTrack(0, 0, C.TIME_UNSET, Collections.emptyList(), new MediaChunkIterator[0]);
+            initialIndex = initialSelection.getSelectedIndexInTrackGroup();
+        }
+        streams.add(0, streams.remove(initialIndex));
+        VideoUri initialUri = manifestUris.remove(initialIndex);
+        manifestUris.add(0, initialUri);
         sb.append(TextUtils.join("", streams));
         final String base64 = Base64.encodeToString(sb.toString().getBytes(), Base64.NO_WRAP);
         return Uri.parse("data:application/x-mpegurl;base64," + base64);

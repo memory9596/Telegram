@@ -89,8 +89,6 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
     public long open(DataSpec dataSpec) throws IOException {
         uri = dataSpec.uri;
         this.dataSpec = dataSpec;
-        isNetwork = true;
-        transferInitializing(dataSpec);
         currentAccount = Utilities.parseInt(uri.getQueryParameter("account"));
         parentObject = FileLoader.getInstance(currentAccount).getParentObject(Utilities.parseInt(uri.getQueryParameter("rid")));
         document = new TLRPC.TL_document();
@@ -111,21 +109,41 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
         allStreams.put(document.id, this);
         currentOffset = dataSpec.position;
         requestedLength = dataSpec.length;
-        loadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, null, parentObject, currentOffset, false, getCurrentPriority());
-        if (loadOperation == null) { allStreams.remove(document.id, this); throw new IOException("Video download paused or cancelled"); }
         bytesTransferred = 0;
+        loadOperation = null;
+        // HLS mappings can retain a tg URI after the file has finished downloading.
+        // Read the completed file without creating another transfer or completion event.
+        File cachedFile = FileDownloadTasks.localFile(currentAccount, document, parentObject instanceof MessageObject ? (MessageObject) parentObject : null);
+        if (cachedFile != null && (document.size <= 0 || cachedFile.length() == document.size)) {
+            try {
+                openFile(cachedFile);
+                if (document.size <= 0) document.size = cachedFile.length();
+            } catch (FileNotFoundException ignore) {
+                // The cache may have been evicted between the lookup and the open.
+            }
+        }
+        isNetwork = file == null;
+        transferInitializing(dataSpec);
         bytesRemaining = document.size - dataSpec.position;
+        if (bytesRemaining < 0) {
+            allStreams.remove(document.id, this);
+            throw new EOFException("Stream position exceeds file size");
+        }
         if (requestedLength != C.LENGTH_UNSET) {
             bytesRemaining = Math.min(bytesRemaining, requestedLength - bytesTransferred);
         }
-        isNetwork = loadOperation.getDownloadedLengthFromOffset(currentOffset, bytesRemaining)[0] < bytesRemaining;
+        if (file == null) {
+            loadOperation = FileLoader.getInstance(currentAccount).loadStreamFile(this, document, null, parentObject, currentOffset, false, getCurrentPriority());
+            if (loadOperation == null) { allStreams.remove(document.id, this); throw new IOException("Video download paused or cancelled"); }
+            isNetwork = loadOperation.getDownloadedLengthFromOffset(currentOffset, bytesRemaining)[0] < bytesRemaining;
+            try {
+                openFile(loadOperation.getCurrentFile());
+            } catch (FileNotFoundException ignore) {
+                // The operation may still be creating its temporary file.
+            }
+        }
         opened = true;
         transferStarted(dataSpec);
-        try {
-            openFile(loadOperation.getCurrentFile());
-        } catch (FileNotFoundException ignore) {
-            // The operation may still be creating its temporary file.
-        }
         FileLog.e("FileStreamLoadOperation " + document.id + " open operation=" + loadOperation + " currentFile=" + currentFile + " file=" + file + " bytesRemaining=" + bytesRemaining + " me=" + this);
         FileLog.e("FileStreamLoadOperation " + document.id + " " + MessageObject.getVideoWidth(document) + "x" + MessageObject.getVideoWidth(document) + " mime_type="+document.mime_type+" codec="+MessageObject.getVideoCodec(document)+" size="+ document.size);
         return bytesRemaining;
@@ -149,7 +167,7 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
         RandomAccessFile stream = new RandomAccessFile(currentFile, "r");
         try {
             stream.seek(currentOffset);
-            if (loadOperation.isFinished()) {
+            if (loadOperation == null || loadOperation.isFinished()) {
                 bytesRemaining = currentFile.length() - currentOffset;
                 if (requestedLength != C.LENGTH_UNSET) {
                     bytesRemaining = Math.min(bytesRemaining, requestedLength - bytesTransferred);
@@ -176,7 +194,8 @@ public class FileStreamLoadOperation implements DataSource, FileLoadOperationStr
                 if (bytesRemaining < readLength) {
                     readLength = (int) bytesRemaining;
                 }
-                while (opened && (availableLength == 0 || file == null)) {
+                if (loadOperation == null) availableLength = readLength;
+                while (opened && loadOperation != null && (availableLength == 0 || file == null)) {
                     if (FileDownloadTasks.isBlocked(currentAccount, document)) throw new IOException("Stream download stopped");
                     long[] downloaded = loadOperation.getDownloadedLengthFromOffset(currentOffset, readLength);
                     if (downloaded[1] == -1) throw new IOException("Stream download failed");
