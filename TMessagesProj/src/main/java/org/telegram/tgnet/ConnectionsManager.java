@@ -439,19 +439,32 @@ public class ConnectionsManager extends BaseController {
                     TLRPC.TL_error error = null;
                     int responseSize = 0;
                     if (response != 0) {
-                        NativeByteBuffer buff = NativeByteBuffer.wrap(response);
-                        buff.setDataSourceType(TLDataSourceType.NETWORK);
-                        buff.reused = true;
-                        responseSize = buff.limit();
-                        int magic = buff.readInt32(true);
                         try {
-                            resp = object.deserializeResponse(buff, magic, true);
+                            NativeByteBuffer buff = NativeByteBuffer.wrap(response);
+                            buff.setDataSourceType(TLDataSourceType.NETWORK);
+                            buff.reused = true;
+                            responseSize = buff.limit();
+                            int magic = buff.readInt32(true);
+                            if (magic == 0x5e2ad36e || magic == 0xa43ad8b7 || magic == 0xcd78e586) {
+                                // RpcDropAnswer can also arrive as the cancelled API request's response.
+                                error = new TLRPC.TL_error();
+                                error.code = -2000;
+                                error.text = "REQUEST_CANCELLED";
+                                if (BuildVars.LOGS_ENABLED) {
+                                    FileLog.d("cancelled request token = " + requestToken + " response constructor = 0x" + Integer.toHexString(magic));
+                                }
+                            } else {
+                                resp = object.deserializeResponse(buff, magic, true);
+                            }
                         } catch (Exception e2) {
                             if (BuildVars.DEBUG_PRIVATE_VERSION) {
-                                throw e2;
+                                FileLog.e(e2);
+                            } else {
+                                FileLog.fatal(e2);
                             }
-                            FileLog.fatal(e2);
-                            return;
+                            error = new TLRPC.TL_error();
+                            error.code = -1000;
+                            error.text = "RESPONSE_PARSE_FAILED";
                         }
                     } else if (errorText != null) {
                         error = new TLRPC.TL_error();
@@ -461,7 +474,7 @@ public class ConnectionsManager extends BaseController {
                             FileLog.e(object + " got error " + error.code + " " + error.text);
                         }
                     }
-                    if ((connectionType & ConnectionTypeDownload) != 0 && VideoPlayer.activePlayers.isEmpty()) {
+                    if (resp != null && error == null && (connectionType & ConnectionTypeDownload) != 0 && VideoPlayer.activePlayers.isEmpty()) {
                         long ping_time = native_getCurrentPingTime(currentAccount);
                         final long size = responseSize;
                         final long delta = Math.max(0, (System.currentTimeMillis() - finalStartRequestTime) - ping_time);
@@ -537,43 +550,51 @@ public class ConnectionsManager extends BaseController {
     }
 
     private void listenCancel(int requestToken, Runnable onCancelled) {
-        RequestCallbacks callbacks = requestCallbacks.get(requestToken);
-        if (callbacks != null) {
-            callbacks.onCancelled = onCancelled;
-//            FileLog.d("{rc} listenCancel(" + currentAccount + ", " + requestToken + "): " + requestCallbacks.size() + " requests' callbacks");
-        } else {
-//            FileLog.d("{rc} listenCancel(" + currentAccount + ", " + requestToken + "): callback not found, " + requestCallbacks.size() + " requests' callbacks");
+        RequestCallbacks callbacks = requestCallbacks.computeIfPresent(requestToken, (token, value) -> {
+            Runnable previousOnCancelled = value.onCancelled;
+            if (previousOnCancelled == null) {
+                value.onCancelled = onCancelled;
+            } else {
+                value.onCancelled = () -> {
+                    try {
+                        previousOnCancelled.run();
+                    } finally {
+                        onCancelled.run();
+                    }
+                };
+            }
+            return value;
+        });
+        if (callbacks == null) {
+            // Completion may have won the race before cancellation was registered.
+            onCancelled.run();
         }
     }
 
     public static void onRequestClear(int currentAccount, int requestToken, boolean cancelled) {
         ConnectionsManager connectionsManager = getInstance(currentAccount);
         if (connectionsManager == null) return;
-        RequestCallbacks callbacks = connectionsManager.requestCallbacks.get(requestToken);
-        if (cancelled) {
-            if (callbacks != null) {
-                if (callbacks.onCancelled != null) {
-                    callbacks.onCancelled.run();
-                }
-                connectionsManager.requestCallbacks.remove(requestToken);
-//                FileLog.d("{rc} onRequestClear(" + currentAccount + ", " + requestToken + ", " + cancelled + "): request to cancel is found " + connectionsManager.requestCallbacks.size() + " requests' callbacks");
-            } else {
-//                FileLog.d("{rc} onRequestClear(" + currentAccount + ", " + requestToken + ", " + cancelled + "): request to cancel is not found " + connectionsManager.requestCallbacks.size() + " requests' callbacks");
-            }
-        } else if (callbacks != null) {
-            connectionsManager.requestCallbacks.remove(requestToken);
-//            FileLog.d("{rc} onRequestClear(" + currentAccount + ", " + requestToken + ", " + cancelled + "): " + connectionsManager.requestCallbacks.size() + " requests' callbacks");
+        RequestCallbacks callbacks = connectionsManager.requestCallbacks.remove(requestToken);
+        // JNI clears queued requests without setting cancelled, but cancellation must still finish.
+        if (callbacks != null && callbacks.onCancelled != null) {
+            callbacks.onCancelled.run();
         }
     }
 
     public static void onRequestComplete(int currentAccount, int requestToken, long response, int errorCode, String errorText, int networkType, long timestamp, long requestMsgId, int dcId) {
         ConnectionsManager connectionsManager = getInstance(currentAccount);
         if (connectionsManager == null) return;
-        RequestCallbacks callbacks = connectionsManager.requestCallbacks.get(requestToken);
-        connectionsManager.requestCallbacks.remove(requestToken);
+        RequestCallbacks callbacks = connectionsManager.requestCallbacks.remove(requestToken);
         if (callbacks != null) {
-            if (callbacks.onComplete != null) {
-                callbacks.onComplete.run(response, errorCode, errorText, networkType, timestamp, requestMsgId, dcId);
+            try {
+                if (callbacks.onComplete != null) {
+                    callbacks.onComplete.run(response, errorCode, errorText, networkType, timestamp, requestMsgId, dcId);
+                }
+            } finally {
+                // Queue the response first so FileLoadOperation can keep chunks received during cancellation.
+                if (callbacks.onCancelled != null) {
+                    callbacks.onCancelled.run();
+                }
             }
 //            FileLog.d("{rc} onRequestComplete(" + currentAccount + ", " + requestToken + "): found request " + requestToken + ", " + connectionsManager.requestCallbacks.size() + " requests' callbacks");
         } else {
