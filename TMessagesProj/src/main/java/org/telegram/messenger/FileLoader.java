@@ -751,6 +751,14 @@ public class FileLoader extends BaseController {
         return fileName != null && loadOperationPathsUI.containsKey(fileName);
     }
 
+    /** Full-file work, excluding playback ranges and idle stream readers. */
+    public boolean isDownloadingFile(String fileName) {
+        LoadOperationUIObject operation = fileName == null ? null : loadOperationPathsUI.get(fileName);
+        return operation != null && operation.fullDownload && !isWaitingForStream(fileName)
+                && !FileDownloadTasks.isPlaybackOnly(currentAccount, fileName)
+                && !FileDownloadTasks.isBlocked(currentAccount, fileName);
+    }
+
     boolean isLoadingFileIndependently(String fileName) {
         LoadOperationUIObject operation = fileName == null ? null : loadOperationPathsUI.get(fileName);
         return operation != null && operation.independentDownload;
@@ -896,7 +904,6 @@ public class FileLoader extends BaseController {
     public void loadFile(WebFile document, int priority, int cacheType) {
         loadFile(null, null, document, null, null, null, null, 0, priority, cacheType);
     }
-
 
     // Task-owned loads must not create another independent download owner.
     void loadFileForTask(FileDownloadSource source) {

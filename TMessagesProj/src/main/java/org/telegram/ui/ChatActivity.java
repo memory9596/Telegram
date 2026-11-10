@@ -1603,7 +1603,36 @@ public class ChatActivity extends BaseFragment implements
 
     MessagePreviewView forwardingPreviewView;
 
+    private final Runnable updateVideoPreviewsRunnable = this::updateVideoPreviews;
+
+    private void updateVideoPreviews() {
+        if (chatListView == null) return;
+        for (int i = 0; i < chatListView.getChildCount(); i++) {
+            View child = chatListView.getChildAt(i);
+            if (child instanceof ChatMessageCell) {
+                ChatMessageCell cell = (ChatMessageCell) child;
+                MessageObject message = cell.getMessageObject();
+                if (message != null && message.isVideo()) {
+                    cell.checkVideoPlayback(true, null);
+                    cell.updateButtonState(false, true, false);
+                }
+            }
+        }
+    }
+
     private PhotoViewer.PhotoViewerProvider photoViewerProvider = new PhotoViewer.EmptyPhotoViewerProvider() {
+
+        @Override
+        public void willSwitchFromPhoto(MessageObject messageObject, TLRPC.FileLocation fileLocation, int index) {
+            AndroidUtilities.cancelRunOnUIThread(updateVideoPreviewsRunnable);
+            AndroidUtilities.runOnUIThread(updateVideoPreviewsRunnable);
+        }
+
+        @Override
+        public void onClose() {
+            AndroidUtilities.cancelRunOnUIThread(updateVideoPreviewsRunnable);
+            updateVideoPreviews();
+        }
 
         @Override
         public PhotoViewer.PlaceProviderObject getPlaceForPhoto(MessageObject messageObject, TLRPC.FileLocation fileLocation, int index, boolean needPreview, boolean closing) {
@@ -1617,6 +1646,18 @@ public class ChatActivity extends BaseFragment implements
         }
     };
     private PhotoViewer.PhotoViewerProvider photoViewerPaidMediaProvider = new PhotoViewer.EmptyPhotoViewerProvider() {
+
+        @Override
+        public void willSwitchFromPhoto(MessageObject messageObject, TLRPC.FileLocation fileLocation, int index) {
+            AndroidUtilities.cancelRunOnUIThread(updateVideoPreviewsRunnable);
+            AndroidUtilities.runOnUIThread(updateVideoPreviewsRunnable);
+        }
+
+        @Override
+        public void onClose() {
+            AndroidUtilities.cancelRunOnUIThread(updateVideoPreviewsRunnable);
+            updateVideoPreviews();
+        }
 
         @Override
         public PhotoViewer.PlaceProviderObject getPlaceForPhoto(MessageObject messageObject, TLRPC.FileLocation fileLocation, int index, boolean needPreview, boolean closing) {
@@ -3351,6 +3392,7 @@ public class ChatActivity extends BaseFragment implements
     @Override
     public void onFragmentDestroy() {
         super.onFragmentDestroy();
+        AndroidUtilities.cancelRunOnUIThread(updateVideoPreviewsRunnable);
         // the comments load may still be in flight, its observer holds this fragment
         if (commentsMessagesObserver != null) {
             getNotificationCenter().removeObserver(commentsMessagesObserver, NotificationCenter.messagesDidLoad);
@@ -24022,6 +24064,7 @@ public class ChatActivity extends BaseFragment implements
                     } else if (messageObject.isVoice() || messageObject.isMusic()) {
                         cell.updateButtonState(false, true, false);
                     } else if (messageObject.isVideo()) {
+                        cell.checkVideoPlayback(true, null);
                         cell.updateButtonState(false, true, false);
                         if (!MediaController.getInstance().isPlayingMessage(messageObject) && !MediaController.getInstance().isGoingToShowMessageObject(messageObject)) {
                             AnimatedFileDrawable animation = cell.getPhotoImage().getAnimation();
