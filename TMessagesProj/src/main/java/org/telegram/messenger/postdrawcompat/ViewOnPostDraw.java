@@ -8,6 +8,9 @@ import android.view.ViewTreeObserver;
 
 import androidx.annotation.NonNull;
 
+import org.telegram.messenger.AndroidUtilities;
+import org.telegram.ui.Components.SizeNotifierFrameLayout;
+
 import me.vkryl.core.reference.ReferenceList;
 
 class ViewOnPostDraw extends View {
@@ -40,7 +43,10 @@ class ViewOnPostDraw extends View {
 
     @Override
     protected void onDraw(@NonNull Canvas canvas) {
-        dispatchOnPostDrawListeners();
+        // Capturing a decor view also draws this helper; it is not a window frame.
+        if (!SizeNotifierFrameLayout.drawingBlur && !AndroidUtilities.makingGlobalBlurBitmap) {
+            dispatchOnPostDrawListeners();
+        }
     }
 
     private void dispatchOnDrawListeners() {

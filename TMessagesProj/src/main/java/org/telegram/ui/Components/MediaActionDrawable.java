@@ -12,6 +12,7 @@ import android.graphics.PorterDuffColorFilter;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
+import android.os.SystemClock;
 import android.text.TextPaint;
 import android.view.animation.DecelerateInterpolator;
 
@@ -856,15 +857,13 @@ public class MediaActionDrawable extends Drawable {
             canvas.restore();
         }
 
-        long newTime = System.currentTimeMillis();
-        long dt = newTime - lastAnimationTime;
-        if (dt > 17) {
-            dt = 17;
-        }
+        long newTime = SystemClock.uptimeMillis();
+        // Redraws can be skipped during scrolling; preserve the animation's elapsed time.
+        long dt = lastAnimationTime == 0 ? 0 : Math.max(0, newTime - lastAnimationTime);
         lastAnimationTime = newTime;
 
         if (currentIcon == ICON_CANCEL || currentIcon == ICON_CANCEL_FILL || currentIcon == ICON_NONE && nextIcon == ICON_CANCEL_FILL || currentIcon == ICON_EMPTY || currentIcon == ICON_CANCEL_PERCENT) {
-            downloadRadOffset += 360 * dt / 2500.0f;
+            downloadRadOffset += 360 * (dt % 2500) / 2500.0f;
             downloadRadOffset = getCircleValue(downloadRadOffset);
 
             if (nextIcon != ICON_DOWNLOAD) {

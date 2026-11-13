@@ -954,7 +954,7 @@ public class ChatActivity extends BaseFragment implements
     });
     private long skeletonLastUpdateTime;
     private int skeletonGradientWidth;
-    private int skeletonTotalTranslation;
+    private float skeletonTotalTranslation;
     private Matrix skeletonMatrix = new Matrix();
     private LinearGradient skeletonGradient;
     private int skeletonColor0;
@@ -5658,19 +5658,15 @@ public class ChatActivity extends BaseFragment implements
             }
 
             private void updateSkeletonGradient() {
+                if (SizeNotifierFrameLayout.drawingBlur || AndroidUtilities.makingGlobalBlurBitmap) return;
                 long newUpdateTime = SystemClock.elapsedRealtime();
-                long dt = Math.abs(skeletonLastUpdateTime - newUpdateTime);
-                if (dt > 17) {
-                    dt = 16;
-                }
-                if (dt < 4) {
-                    dt = 0;
-                }
+                long dt = skeletonLastUpdateTime == 0 ? 0 : Math.max(0, newUpdateTime - skeletonLastUpdateTime);
                 int width = getWidth();
                 skeletonLastUpdateTime = newUpdateTime;
-                skeletonTotalTranslation += dt * width / 400.0f;
-                if (skeletonTotalTranslation >= width * 2) {
-                    skeletonTotalTranslation = -skeletonGradientWidth * 2;
+                float cycle = width * 2f + skeletonGradientWidth * 2f;
+                if (cycle > 0) {
+                    skeletonTotalTranslation = (skeletonTotalTranslation + skeletonGradientWidth * 2f
+                            + dt * width / 400.0f) % cycle - skeletonGradientWidth * 2f;
                 }
                 skeletonMatrix.setTranslate(skeletonTotalTranslation, 0);
                 if (skeletonGradient != null) {
@@ -18464,6 +18460,10 @@ public class ChatActivity extends BaseFragment implements
         private final RectF tmpRectF2 = new RectF();
 
         public void drawList(Canvas blurCanvas, RectF position) {
+            drawListForGlass(blurCanvas, position);
+        }
+
+        private void drawListForGlass(Canvas blurCanvas, RectF position) {
             tmpRectF2.set(position);
             tmpRectF2.intersect(0, 0, getWidth(), getHeight());
             if (tmpRectF2.isEmpty()) {
@@ -21709,7 +21709,8 @@ public class ChatActivity extends BaseFragment implements
         if (!visible && startMessageAppearTransitionMs == 0) {
             checkDispatchHideSkeletons(fragmentBeginToShow);
         }
-        if (SharedConfig.getDevicePerformanceClass() != SharedConfig.PERFORMANCE_CLASS_LOW && !fromPullingDownTransition && fragmentBeginToShow) {
+        if (SharedConfig.getDevicePerformanceClass() != SharedConfig.PERFORMANCE_CLASS_LOW && !fromPullingDownTransition && fragmentBeginToShow
+                && !SizeNotifierFrameLayout.drawingBlur && !AndroidUtilities.makingGlobalBlurBitmap) {
             boolean rotate = visible && startMessageAppearTransitionMs == 0;
             Drawable wallpaper = themeDelegate.getWallpaperDrawable();
             if (contentView != null) {

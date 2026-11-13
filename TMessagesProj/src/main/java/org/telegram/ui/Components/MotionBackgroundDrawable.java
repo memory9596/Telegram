@@ -649,13 +649,14 @@ public class MotionBackgroundDrawable extends Drawable {
     }
 
     public void updateAnimation() {
+        if (SizeNotifierFrameLayout.drawingBlur || AndroidUtilities.makingGlobalBlurBitmap) return;
         long newTime = SystemClock.elapsedRealtime();
-        long dt = newTime - lastUpdateTime;
-        if (dt > 20) {
+        long dt = lastUpdateTime == 0 ? 17 : Math.max(0, newTime - lastUpdateTime);
+        if (!isIndeterminateAnimation && dt > 20) {
             dt = 17;
         }
         lastUpdateTime = newTime;
-        if (dt <= 1) {
+        if (dt <= 0 || !isIndeterminateAnimation && dt <= 1) {
             return;
         }
 
@@ -666,10 +667,7 @@ public class MotionBackgroundDrawable extends Drawable {
             float progress;
             boolean isNeedGenerateGradient = postInvalidateParent || rotatingPreview;
             if (isIndeterminateAnimation) {
-                posAnimationProgress += (dt / 12000f) * indeterminateSpeedScale;
-                if (posAnimationProgress >= 1.0f) {
-                    posAnimationProgress = 0.0f;
-                }
+                posAnimationProgress = (posAnimationProgress + (dt / 12000f) * indeterminateSpeedScale) % 1f;
                 float progressPerPhase = 1f / 8f;
                 phase = (int) (posAnimationProgress / progressPerPhase);
                 progress = 1f - (posAnimationProgress - phase * progressPerPhase) / progressPerPhase;
@@ -824,6 +822,9 @@ public class MotionBackgroundDrawable extends Drawable {
     }
 
     public void setIndeterminateAnimation(boolean isIndeterminateAnimation) {
+        if (this.isIndeterminateAnimation != isIndeterminateAnimation) {
+            lastUpdateTime = SystemClock.elapsedRealtime();
+        }
         if (!isIndeterminateAnimation && this.isIndeterminateAnimation) {
             float progressPerPhase = 1f / 8f;
             int phase = (int) (posAnimationProgress / progressPerPhase);
