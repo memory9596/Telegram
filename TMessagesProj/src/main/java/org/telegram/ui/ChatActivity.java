@@ -118,6 +118,7 @@ import androidx.core.content.FileProvider;
 import androidx.core.graphics.ColorUtils;
 import androidx.core.graphics.Insets;
 import androidx.core.graphics.drawable.DrawableCompat;
+import androidx.core.view.OneShotPreDrawListener;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.dynamicanimation.animation.FloatValueHolder;
@@ -1080,6 +1081,13 @@ public class ChatActivity extends BaseFragment implements
     private AnimatorSet scrimAnimatorSet;
     public ActionBarPopupWindow scrimPopupWindow;
     private boolean scrimPopupWindowHideDimOnDismiss = true;
+    private ShareAlert quickShareAlert;
+    private ShareAlert.QuickShareCells quickShareCells;
+    private ShareAlert.QuickShareCells pendingQuickShareCells;
+    private int quickShareGeneration;
+    private Runnable pendingQuickShareOpen;
+    private Runnable pendingQuickShareSelectionExit;
+    private OneShotPreDrawListener quickSharePreparationDrawListener;
     private int scrimPopupX, scrimPopupY;
     private ActionBarMenuSubItem[] scrimPopupWindowItems;
     private ActionBarMenuSubItem menuDeleteItem;
@@ -3391,6 +3399,11 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public void onFragmentDestroy() {
+        cancelPendingQuickShare();
+        if (quickShareAlert != null) {
+            quickShareAlert.dismissInternal();
+        }
+        discardQuickShareCells();
         super.onFragmentDestroy();
         AndroidUtilities.cancelRunOnUIThread(updateVideoPreviewsRunnable);
         // the comments load may still be in flight, its observer holds this fragment
@@ -3850,7 +3863,6 @@ public class ChatActivity extends BaseFragment implements
                             msgs.add(selectedMessagesIds[a].valueAt(b));
                         }
                     }
-                    clearSelectionMode(true);
                     showQuickShare(msgs, msgs.isEmpty() ? null : msgs.get(0));
                 } else if (id == share) {
                     share();
@@ -12863,18 +12875,127 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private void showQuickShare(ArrayList<MessageObject> msgs, MessageObject primaryForStory) {
-        if (msgs == null || msgs.isEmpty() || getParentActivity() == null) return;
+        if (msgs == null || msgs.isEmpty() || isFinished || isPaused || getParentActivity() == null
+                || fragmentView == null || visibleDialog != null || quickShareAlert != null || pendingQuickShareOpen != null) return;
+        final int generation = ++quickShareGeneration;
+        final int account = currentAccount;
+        pendingQuickShareCells = quickShareCells;
+        quickShareCells = null;
+        if (pendingQuickShareCells != null) pendingQuickShareCells.stop();
+        pendingQuickShareOpen = () -> {
+            if (!canShowQuickShare(generation) || currentAccount != account) {
+                if (generation == quickShareGeneration) cancelPendingQuickShare();
+                return;
+            }
+            final ShareAlert.QuickShareCells preparedCells = pendingQuickShareCells;
+            pendingQuickShareCells = null;
+            pendingQuickShareOpen = null;
+            openQuickShare(msgs, primaryForStory, preparedCells);
+        };
+        if (actionBar != null && actionBar.isActionModeShowed()) {
+            dimBehindView(true);
+            clearSelectionMode(true);
+            actionBar.runAfterActionModeAnimation(() -> {
+                if (generation != quickShareGeneration) return;
+                pendingQuickShareSelectionExit = () -> runAfterQuickShareDraw(generation);
+                finishQuickShareSelectionExit();
+            });
+        } else if (scrimPopupWindow != null) {
+            if (chatActivityEnterView != null) chatActivityEnterView.closeKeyboard();
+            // Route Back to the chat while the fading menu still owns its window.
+            scrimPopupWindow.setFocusable(false);
+            scrimPopupWindow.update();
+            // Fade the menu and message highlight while retaining the existing dim.
+            scrimPopupWindow.setDismissAnimationDuration(120);
+            closeMenu(false);
+            if (!scrimViewAlphaAnimator.isRunning()) {
+                runAfterQuickShareDraw(generation);
+            } else {
+                scrimViewAlphaAnimator.addListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        animation.removeListener(this);
+                        runAfterQuickShareDraw(generation);
+                    }
+                });
+            }
+        } else {
+            runAfterQuickShareDraw(generation);
+        }
+    }
+
+    private boolean canShowQuickShare(int generation) {
+        return generation == quickShareGeneration && !isFinished && !isPaused
+                && getParentActivity() != null && fragmentView != null && fragmentView.isAttachedToWindow()
+                && visibleDialog == null && quickShareAlert == null
+                && (actionBar == null || !actionBar.isActionModeShowed());
+    }
+
+    private void finishQuickShareSelectionExit() {
+        if (pendingQuickShareSelectionExit != null
+                && bottomViewsVisibilityController.getVisibility(MESSAGE_ACTION_CONTAINER) == 0f) {
+            final Runnable onReady = pendingQuickShareSelectionExit;
+            pendingQuickShareSelectionExit = null;
+            onReady.run();
+        }
+    }
+
+    private void runAfterQuickShareDraw(int generation) {
+        if (generation != quickShareGeneration || pendingQuickShareOpen == null) return;
+        if (!canShowQuickShare(generation)) {
+            cancelPendingQuickShare();
+            return;
+        }
+        if (actionBar != null && actionBar.isActionModeAnimationRunning()) {
+            actionBar.runAfterActionModeAnimation(() -> runAfterQuickShareDraw(generation));
+            return;
+        }
+        if (quickSharePreparationDrawListener != null) quickSharePreparationDrawListener.removeListener();
+        quickSharePreparationDrawListener = OneShotPreDrawListener.add(fragmentView, () -> {
+            if (generation != quickShareGeneration) return;
+            quickSharePreparationDrawListener = null;
+            // Construct after this traversal has painted the completed exit transition.
+            fragmentView.post(pendingQuickShareOpen);
+        });
+        fragmentView.invalidate();
+    }
+
+    private void cancelPendingQuickShare() {
+        quickShareGeneration++;
+        pendingQuickShareSelectionExit = null;
+        if (quickSharePreparationDrawListener != null) {
+            quickSharePreparationDrawListener.removeListener();
+            quickSharePreparationDrawListener = null;
+        }
+        if (pendingQuickShareCells != null) {
+            pendingQuickShareCells.stop();
+            pendingQuickShareCells = null;
+        }
+        if (pendingQuickShareOpen != null) {
+            if (fragmentView != null) fragmentView.removeCallbacks(pendingQuickShareOpen);
+            pendingQuickShareOpen = null;
+            if (fragmentView != null && chatListView != null) dimBehindView(false);
+        }
+    }
+
+    private void openQuickShare(ArrayList<MessageObject> msgs, MessageObject primaryForStory, ShareAlert.QuickShareCells preparedCells) {
         final boolean includeStory = getMessagesController().storiesEnabled()
                 && StoryEntry.canRepostMessage(primaryForStory);
-        showDialog(new ShareAlert(getContext(), ChatActivity.this, msgs, null, null,
+        final ShareAlert alert = new ShareAlert(getContext(), ChatActivity.this, msgs, null, null,
                 ChatObject.isChannel(currentChat), null, null, false, false,
                 includeStory, null, themeDelegate, false) {
             { includeStoryFromMessage = includeStory; }
             @Override
             public void dismissInternal() {
-                AndroidUtilities.requestAdjustResize(getParentActivity(), classGuid);
+                if (attachedFragment == null) {
+                    AndroidUtilities.requestAdjustResize(getParentActivity(), classGuid);
+                }
                 super.dismissInternal();
-                if (chatActivityEnterView.getVisibility() == View.VISIBLE) {
+                if (quickShareAlert == this) {
+                    quickShareAlert = null;
+                    prepareQuickShareCells();
+                }
+                if (fragmentView != null && chatActivityEnterView != null && chatActivityEnterView.getVisibility() == View.VISIBLE) {
                     fragmentView.requestLayout();
                 }
             }
@@ -12934,9 +13055,82 @@ public class ChatActivity extends BaseFragment implements
                             null, null);
                 }
             }
-        });
-        AndroidUtilities.setAdjustResizeToNothing(getParentActivity(), classGuid);
-        fragmentView.requestLayout();
+        };
+        alert.setQuickShareCells(preparedCells);
+        final boolean attached = alert.attachToChat(this);
+        alert.setInitialDimAlpha(Math.round(255 * scrimPaintAlpha));
+        quickShareAlert = alert;
+        if (showDialog(alert) == null || !alert.isShowing()) {
+            alert.dismissInternal();
+            dimBehindView(false);
+            return;
+        }
+        // The sheet is installed before removing the menu scrim. In the attached path both
+        // changes are rendered by the same ViewRoot, with exactly one black overlay.
+        clearMenuForQuickShare();
+        if (!attached) {
+            AndroidUtilities.setAdjustResizeToNothing(getParentActivity(), classGuid);
+            fragmentView.requestLayout();
+        }
+    }
+
+    private void prepareQuickShareCells() {
+        cancelPendingQuickShare();
+        if (quickShareCells == null && !isFinished && !isPaused && fragmentView != null && getParentActivity() != null) {
+            quickShareCells = new ShareAlert.QuickShareCells(fragmentView, themeDelegate,
+                    () -> openAnimationEnded && !isPaused && visibleDialog == null && quickShareAlert == null
+                            && (parentLayout == null || !parentLayout.isTransitionAnimationInProgress())
+                            && (actionBar == null || !actionBar.isActionModeAnimationRunning())
+                            && (scrimViewAlphaAnimator == null || !scrimViewAlphaAnimator.isRunning())
+                            && bottomViewsVisibilityController.getVisibility(
+                                bottomViewsVisibilityController.getCurrentPriorityContainerId()) == 1f
+                            && (chatListView == null || !chatListView.isComputingLayout()
+                                && chatListView.getScrollState() == RecyclerView.SCROLL_STATE_IDLE)
+                            && (chatListItemAnimator == null || !chatListItemAnimator.isRunning()));
+        }
+    }
+
+    private void discardQuickShareCells() {
+        if (quickShareCells != null) {
+            quickShareCells.stop();
+            quickShareCells = null;
+        }
+    }
+
+    private void clearMenuForQuickShare() {
+        if (scrimPopupWindow != null) {
+            scrimPopupWindowHideDimOnDismiss = false;
+            // Use the menu's normal dismissal override so its scroll, cursor and
+            // popup references are restored before the sheet takes over.
+            scrimPopupWindow.setAnimationEnabled(false);
+            scrimPopupWindow.dismiss();
+        }
+        if (scrimAnimatorSet != null) {
+            scrimAnimatorSet.removeAllListeners();
+            scrimAnimatorSet.cancel();
+            scrimAnimatorSet = null;
+        }
+        if (scrimViewAlphaAnimator != null) {
+            scrimViewAlphaAnimator.cancel();
+            scrimViewAlphaAnimator = null;
+        }
+        if (scrimView instanceof ChatMessageCell) {
+            ((ChatMessageCell) scrimView).setInvalidatesParent(false);
+        }
+        setScrimView(null);
+        scrimViewTask = null;
+        scrimViewReaction = null;
+        scrimPaintAlpha = scrimViewProgress = 0;
+        scrimViewAlpha = 1;
+        if (scrimBlurBitmap != null) {
+            scrimBlurBitmapShader = null;
+            scrimBlurBitmapPaint = null;
+            scrimBlurBitmap.recycle();
+            scrimBlurBitmap = null;
+        }
+        if (sideControlsButtonsLayout != null) sideControlsButtonsLayout.setAlpha(1);
+        contentView.invalidate();
+        chatListView.invalidate();
     }
 
     private void openForward(boolean fromActionBar) {
@@ -16858,7 +17052,7 @@ public class ChatActivity extends BaseFragment implements
                     if (blurEnabled) {
                         messageCell.setVisibleOnScreen(false, 0, 0);
                     } else {
-                        messageCell.setVisibleOnScreen(true, 0, 0);
+                        messageCell.setVisibleOnScreen(true, clipTopFinal - top, bottom - clipBottomFinal);
                     }
                 }
                 continue;
@@ -31039,6 +31233,7 @@ public class ChatActivity extends BaseFragment implements
         if (starReactionsOverlay != null) {
             starReactionsOverlay.bringToFront();
         }
+        prepareQuickShareCells();
     }
 
     public float getPullingDownOffset() {
@@ -31104,6 +31299,8 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public void onPause() {
+        cancelPendingQuickShare();
+        discardQuickShareCells();
         super.onPause();
         scrolling = false;
         if (scrimPopupWindow != null) {
@@ -33670,6 +33867,7 @@ public class ChatActivity extends BaseFragment implements
             chatListView.stopScroll();
             chatLayoutManager.setCanScrollVertically(false);
             dimBehindView(v, true);
+            prepareQuickShareCells();
             hideHints(false);
             if (topUndoView != null) {
                 topUndoView.hide(true, 1);
@@ -33722,6 +33920,8 @@ public class ChatActivity extends BaseFragment implements
         closeMenu();
         chatLayoutManager.setCanScrollVertically(true);
         updatePinnedMessageView(true);
+
+        prepareQuickShareCells();
 
         AnimatorSet animatorSet = new AnimatorSet();
         ArrayList<Animator> animators = new ArrayList<>();
@@ -34568,6 +34768,12 @@ public class ChatActivity extends BaseFragment implements
                         ? new ArrayList<>(selectedObjectGroup.messages)
                         : new ArrayList<>(Collections.singletonList(selectedObject));
                 showQuickShare(msgs, selectedObject);
+                if (pendingQuickShareOpen != null) {
+                    selectedObject = null;
+                    selectedObjectGroup = null;
+                    selectedObjectToEditCaption = null;
+                    return;
+                }
                 break;
             }
             case OPTION_COPY: {
@@ -35751,6 +35957,10 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public boolean onBackPressed(boolean invoked) {
+        if (pendingQuickShareOpen != null) {
+            if (invoked) cancelPendingQuickShare();
+            return false;
+        }
         // the chat's menu is opened over the topics panel: it closes first
         if (actionBar != null && actionBar.getOpenMenuOverlay() != null) {
             if (invoked) actionBar.closeMenuOverlay(true);
@@ -47605,6 +47815,7 @@ public class ChatActivity extends BaseFragment implements
         }
 
         checkUi_inputIslandHeight();
+        finishQuickShareSelectionExit();
     }
 
     /**

@@ -37,6 +37,7 @@ import android.text.TextPaint;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.TypedValue;
+import android.view.Choreographer;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
@@ -784,6 +785,11 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
 
 
         sizeNotifierFrameLayout = new SizeNotifierFrameLayout(context) {
+
+            @Override
+            public int measureKeyboardHeight() {
+                return attachedFragment != null ? attachedKeyboardHeight : super.measureKeyboardHeight();
+            }
 
             private boolean ignoreLayout = false;
             private RectF rect1 = new RectF();
@@ -2291,8 +2297,104 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
 
     private Insets systemInsets = Insets.NONE;
 
+    public boolean attachToChat(ChatActivity fragment) {
+        setOpenAnimationAfterLayout();
+        return makeAttachedToEdgeToEdgeFragment(fragment);
+    }
+
+    private QuickShareCells quickShareCells;
+
+    public void setQuickShareCells(QuickShareCells cells) {
+        if (cells != null) {
+            cells.stop();
+            if (cells.account != currentAccount) cells = null;
+            else if (includeStory) {
+                // Create the story tile on opening to preserve its delayed animation,
+                // then reuse the prepared forwarding dialogs in their original order.
+                cells.cells.add(0, null);
+            }
+        }
+        quickShareCells = cells;
+    }
+
+    /** Detached cells prepared while the chat is idle and rebound on opening. */
+    public static final class QuickShareCells implements Runnable, Choreographer.FrameCallback {
+        private static final long PREPARATION_INTERVAL_NS = 1_000_000_000L / 60;
+        private final View owner;
+        private final Theme.ResourcesProvider resourcesProvider;
+        private final BooleanSupplier canPrepare;
+        private final ArrayList<ShareDialogCell> cells = new ArrayList<>();
+        private long nextPreparationTimeNs;
+        private final int account = UserConfig.selectedAccount;
+        private boolean stopped;
+
+        public QuickShareCells(View owner, Theme.ResourcesProvider resourcesProvider, BooleanSupplier canPrepare) {
+            this.owner = owner;
+            this.resourcesProvider = resourcesProvider;
+            this.canPrepare = canPrepare;
+            // The idle predicate waits for active transitions before optional work starts.
+            owner.post(this);
+        }
+
+        @Override
+        public void run() {
+            if (!stopped) Choreographer.getInstance().postFrameCallback(this);
+        }
+
+        @Override
+        public void doFrame(long frameTimeNanos) {
+            final int capacity = Math.min(24, 4 * (1 + (int) Math.ceil(owner.getHeight() * .6f / dp(100))));
+            if (stopped || !owner.isAttachedToWindow() || account != UserConfig.selectedAccount || cells.size() >= capacity) return;
+            if (!canPrepare.getAsBoolean()) {
+                owner.postDelayed(this, 80);
+                return;
+            }
+            // Higher refresh rates must not multiply optional allocations on the UI thread.
+            if (nextPreparationTimeNs == 0) nextPreparationTimeNs = frameTimeNanos;
+            if (frameTimeNanos < nextPreparationTimeNs) {
+                run();
+                return;
+            }
+            nextPreparationTimeNs += PREPARATION_INTERVAL_NS;
+            // Skip missed slots instead of catching up when the chat becomes idle again.
+            if (nextPreparationTimeNs <= frameTimeNanos) {
+                nextPreparationTimeNs = frameTimeNanos + PREPARATION_INTERVAL_NS;
+            }
+            ShareDialogCell cell = new ShareDialogCell(owner.getContext(), ShareDialogCell.TYPE_SHARE, resourcesProvider) {
+                @Override
+                protected String repostToCustomName() {
+                    return LocaleController.getString(R.string.RepostToStory);
+                }
+            };
+            ArrayList<TLRPC.Dialog> dialogs = MessagesController.getInstance(account).dialogsForward;
+            long dialogId = cells.size() < dialogs.size() ? dialogs.get(cells.size()).id : UserConfig.getInstance(account).clientUserId;
+            // Prepare real text measurement and font resources as well as the view.
+            // The adapter always rebinds current data and selection on opening.
+            cell.setDialog(dialogId, false, null);
+            int cellWidth = Math.max(1, owner.getWidth() / 4 - dp(8));
+            cell.measure(View.MeasureSpec.makeMeasureSpec(cellWidth, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(dp(100), View.MeasureSpec.EXACTLY));
+            cell.layout(0, 0, cell.getMeasuredWidth(), cell.getMeasuredHeight());
+            cells.add(cell);
+            // At most one allocation per frame. Opening never waits for this queue.
+            run();
+        }
+
+        public void stop() {
+            stopped = true;
+            owner.removeCallbacks(this);
+            Choreographer.getInstance().removeFrameCallback(this);
+        }
+
+        private ShareDialogCell take() {
+            return cells.isEmpty() ? null : cells.remove(0);
+        }
+    }
+
     @NonNull
     private WindowInsetsCompat onApplyWindowInsets(@NonNull View ignoredV, @NonNull WindowInsetsCompat insets) {
+        attachedKeyboardHeight = Math.max(0, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                - insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom);
         processLegacyContainerInsets(insets.toWindowInsets());
 
         final Insets systemInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -3223,6 +3325,10 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             return;
         }
         shareClosed = true;
+        if (quickShareCells != null) {
+            quickShareCells.stop();
+            quickShareCells = null;
+        }
         clearPendingTopicsLoad();
         closeSendPopup();
         if (filterTabsView != null) {
@@ -3655,7 +3761,8 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             View view;
             switch (viewType) {
                 case 0: {
-                    view = new ShareDialogCell(context, ShareDialogCell.TYPE_SHARE, resourcesProvider) {
+                    view = quickShareCells == null ? null : quickShareCells.take();
+                    if (view == null) view = new ShareDialogCell(context, ShareDialogCell.TYPE_SHARE, resourcesProvider) {
                         @Override
                         protected String repostToCustomName() {
                             if (includeStoryFromMessage) {

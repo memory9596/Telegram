@@ -295,6 +295,23 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
     public boolean smoothKeyboardAnimationEnabled;
     public boolean smoothKeyboardByBottom;
     private boolean openNoDelay;
+    private boolean openAnimationAfterLayout;
+    private int initialDimAlpha;
+    private boolean attachedEdgeToEdge;
+    protected int attachedKeyboardHeight;
+    private View previousAttachedFocus;
+    private OnDismissListener attachedDismissListener;
+
+    /** Start from the first real layout, without a speculative measure or a delayed timer. */
+    protected void setOpenAnimationAfterLayout() {
+        openAnimationAfterLayout = true;
+        // The scrim changes every frame. Do not rasterize it together with the entire window.
+        useHardwareLayer = false;
+    }
+
+    public void setInitialDimAlpha(int alpha) {
+        initialDimAlpha = Math.max(0, Math.min(dimBehindAlpha, alpha));
+    }
 
     private float hideSystemVerticalInsetsProgress;
     public boolean useBackgroundTopPadding = true;
@@ -331,7 +348,19 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
     public void addThemeColorKeys(HashSet<Integer> keys) {
     }
 
-    public class ContainerView extends FrameLayout implements NestedScrollingParent, Theme.Colorable {
+    public class ContainerView extends FrameLayout implements NestedScrollingParent, Theme.Colorable, BaseFragment.AttachedSheetWindow {
+
+        @Override
+        public boolean drawsBelowNavigationBar() {
+            return attachedEdgeToEdge;
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent event) {
+            // Attached sheets bypass Dialog.dispatchTouchEvent; keep closing content inert.
+            if (attachedFragment != null && dismissed) return true;
+            return super.dispatchTouchEvent(event);
+        }
 
         @Override
         public void addColorKeys(HashSet<Integer> colors) {
@@ -671,6 +700,12 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
             } else {
                 keyboardHeight = 0;
             }
+            if (attachedEdgeToEdge) {
+                keyboardHeight = attachedKeyboardHeight;
+                if (keyboardHeight > 0) {
+                    lastKeyboardHeight = keyboardHeight;
+                }
+            }
             if (oldKeyboardHeight != keyboardHeight) {
                 keyboardChanged = true;
             }
@@ -682,7 +717,7 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
                 if (Build.VERSION.SDK_INT >= 29) {
                     bottomInset += getAdditionalMandatoryOffsets();
                 }
-                if (keyboardVisible && rect.bottom != 0 && rect.top != 0) {
+                if (keyboardVisible && (attachedEdgeToEdge || rect.bottom != 0 && rect.top != 0)) {
                     bottomInset -= keyboardHeight;
                 }
                 if (!drawNavigationBar && !occupyNavigationBar && !occupyNavigationBarWithoutKeyboard) {
@@ -1513,14 +1548,23 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
 
         Window window = null;
         if (attachedFragment != null) {
+            final FrameLayout host = attachedFragment.getLayoutContainer();
+            if (host == null) throw new IllegalStateException("Sheet host is detached");
             attachedFragment.addSheet(this);
-            if (attachedFragment.getLayoutContainer() == null) return;
 
             InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-            if (imm.hideSoftInputFromWindow(attachedFragment.getLayoutContainer().getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS)) {
+            boolean hidingKeyboard = imm.hideSoftInputFromWindow(host.getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
+            if (attachedEdgeToEdge) {
+                previousAttachedFocus = host.findFocus();
+                AndroidUtilities.removeFromParent(container);
+                host.addView(container, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+                container.setFocusableInTouchMode(true);
+                container.requestFocus();
+            } else if (hidingKeyboard) {
                 AndroidUtilities.runOnUIThread(() -> {
+                    if (dismissed || attachedFragment.getLayoutContainer() != host) return;
                     AndroidUtilities.removeFromParent(container);
-                    attachedFragment.getLayoutContainer().addView(container);
+                    host.addView(container);
                 }, 80);
             } else {
                 AndroidUtilities.removeFromParent(container);
@@ -1564,7 +1608,7 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
             containerView.setBackgroundDrawable(shadowDrawable);
             containerView.setPadding(backgroundPaddingLeft, (applyTopPadding ? dp(8) : 0) + backgroundPaddingTop - 1, backgroundPaddingLeft, (applyBottomPadding ? dp(8) : 0));
         }
-        containerView.setVisibility(View.INVISIBLE);
+        containerView.setVisibility(openAnimationAfterLayout ? View.VISIBLE : View.INVISIBLE);
         container.addView(containerView, 0, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.BOTTOM));
 
         if (topBulletinContainer == null) {
@@ -1767,30 +1811,33 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
             super.show();
         }
         setShowing(true);
-        if (focusable) {
+        if (focusable && attachedFragment == null) {
             getWindow().setSoftInputMode(focusableSoftInputMode);
         }
         dismissed = false;
         cancelSheetAnimation();
-        containerView.measure(
-            View.MeasureSpec.makeMeasureSpec(AndroidUtilities.displaySize.x + backgroundPaddingLeft * 2, View.MeasureSpec.AT_MOST),
-            View.MeasureSpec.makeMeasureSpec(AndroidUtilities.displaySize.y, View.MeasureSpec.AT_MOST)
-        );
+        if (!openAnimationAfterLayout) {
+            containerView.measure(
+                View.MeasureSpec.makeMeasureSpec(AndroidUtilities.displaySize.x + backgroundPaddingLeft * 2, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(AndroidUtilities.displaySize.y, View.MeasureSpec.AT_MOST)
+            );
+        }
         if (showWithoutAnimation) {
+            containerView.setVisibility(View.VISIBLE);
             backDrawable.setAlpha(dimBehind ? dimBehindAlpha : 0);
             containerView.setTranslationY(0);
             onContainerViewTranslation();
             return;
         }
-        backDrawable.setAlpha(0);
-        layoutCount = 2;
+        backDrawable.setAlpha(dimBehind ? initialDimAlpha : 0);
+        layoutCount = openAnimationAfterLayout ? 1 : 2;
         containerView.setTranslationY(AndroidUtilities.statusBarHeight * (1f - hideSystemVerticalInsetsProgress) + containerView.getMeasuredHeight() + (scrollNavBar ? Math.max(0, Math.min(AndroidUtilities.navigationBarHeight, getBottomInset())) : 0));
         onContainerViewTranslation();
         long delay = openNoDelay ? 0 : 150;
         if (waitingKeyboard) {
             delay = 500;
         }
-        AndroidUtilities.runOnUIThread(startAnimationRunnable = new Runnable() {
+        startAnimationRunnable = new Runnable() {
             @Override
             public void run() {
                 if (startAnimationRunnable != this || dismissed) {
@@ -1799,7 +1846,10 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
                 startAnimationRunnable = null;
                 startOpenAnimation();
             }
-        }, delay);
+        };
+        if (!openAnimationAfterLayout) {
+            AndroidUtilities.runOnUIThread(startAnimationRunnable, delay);
+        }
     }
 
     public Drawable getBackDrawable() {
@@ -1894,6 +1944,10 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
     }
 
     protected void cancelSheetAnimation() {
+        if (startAnimationRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(startAnimationRunnable);
+            startAnimationRunnable = null;
+        }
         if (currentSheetAnimation != null) {
             currentSheetAnimation.cancel();
             currentSheetAnimation = null;
@@ -1959,7 +2013,7 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
                 currentSheetAnimation.setDuration(openDuration);
                 currentSheetAnimation.setInterpolator(openInterpolator);
             }
-            currentSheetAnimation.setStartDelay(waitingKeyboard ? 0 : 20);
+            currentSheetAnimation.setStartDelay(waitingKeyboard || openAnimationAfterLayout ? 0 : 20);
             currentSheetAnimation.setInterpolator(openInterpolator);
             int finalAccount = currentAccount;
             notificationsLocker.lock();
@@ -2175,7 +2229,12 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
 
     @Override
     public boolean isShown() {
-        return !dismissed;
+        return showing && !dismissed;
+    }
+
+    @Override
+    public boolean isShowing() {
+        return attachedFragment != null ? isShown() : super.isShowing();
     }
 
     protected void appendOpenAnimator(boolean opening, ArrayList<Animator> animators) {
@@ -2197,10 +2256,13 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
         if (onHideListener != null) {
             onHideListener.onDismiss(this);
         }
+        final boolean beforeFirstLayout = openAnimationAfterLayout && startAnimationRunnable != null;
         cancelSheetAnimation();
         long duration = 0;
         onDismissAnimationStart();
-        if (skipDismissAnimation) {
+        if (beforeFirstLayout) {
+            dismissInternal();
+        } else if (skipDismissAnimation) {
             AndroidUtilities.runOnUIThread(() -> {
                 try {
                     dismissInternal();
@@ -2350,6 +2412,7 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
 
     @Override
     public void setOnDismissListener(@Nullable OnDismissListener listener) {
+        attachedDismissListener = listener;
         super.setOnDismissListener(listener);
     }
 
@@ -2358,9 +2421,25 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
     }
 
     public void dismissInternal() {
+        dismissed = true;
+        cancelSheetAnimation();
+        setShowing(false);
         if (attachedFragment != null) {
+            final boolean restoreFocus = container.hasFocus();
             attachedFragment.removeSheet(this);
             AndroidUtilities.removeFromParent(container);
+            if (restoreFocus && previousAttachedFocus != null && previousAttachedFocus.isAttachedToWindow()) {
+                previousAttachedFocus.requestFocus();
+            }
+            previousAttachedFocus = null;
+            if (attachedDismissListener != null) {
+                OnDismissListener listener = attachedDismissListener;
+                attachedDismissListener = null;
+                listener.onDismiss(this);
+            }
+            if (LaunchActivity.instance != null) {
+                LaunchActivity.instance.checkSystemBarColors(true, true, true);
+            }
         } else {
             try {
                 super.dismiss();
@@ -2665,6 +2744,19 @@ public class BottomSheet extends Dialog implements BaseFragment.AttachedSheet {
         if (backDrawable != null) {
             backDrawable.bgPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC_OVER));
         }
+    }
+
+    /** Opt in only for sheets that consume system-bar and IME insets themselves. */
+    protected boolean makeAttachedToEdgeToEdgeFragment(BaseFragment fragment) {
+        if (Build.VERSION.SDK_INT < 30 || AndroidUtilities.isTablet() || fragment == null
+                || fragment.getEdgeToEdgeSupportMode() != EdgeToEdgeSupportMode.FULL || fragment.getLayoutContainer() == null
+                || !fragment.getLayoutContainer().isAttachedToWindow()) {
+            return false;
+        }
+        attachedFragment = fragment;
+        attachedEdgeToEdge = true;
+        backDrawable.bgPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC_OVER));
+        return true;
     }
 
     @Override

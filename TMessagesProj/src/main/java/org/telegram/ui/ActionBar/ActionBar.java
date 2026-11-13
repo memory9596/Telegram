@@ -1170,6 +1170,24 @@ public class ActionBar extends FrameLayout implements FactorAnimator.Target, The
         }
     }
 
+    public boolean isActionModeAnimationRunning() {
+        return actionModeAnimation != null && actionModeAnimation.isRunning();
+    }
+
+    public void runAfterActionModeAnimation(Runnable runnable) {
+        if (actionModeAnimation == null) {
+            AndroidUtilities.runOnUIThread(runnable);
+            return;
+        }
+        actionModeAnimation.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                animation.removeListener(this);
+                AndroidUtilities.runOnUIThread(runnable);
+            }
+        });
+    }
+
     public void hideActionMode() {
         if (actionMode == null || !actionModeVisible) {
             return;

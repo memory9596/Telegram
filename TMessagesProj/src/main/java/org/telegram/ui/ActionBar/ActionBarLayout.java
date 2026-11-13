@@ -279,7 +279,7 @@ public class ActionBarLayout extends FrameLayout implements INavigationLayout, F
                     if (this == containerView && edgeToEdgeSupportMode != EdgeToEdgeSupportMode.NONE) {
                         for (int a = 0, N = getChildCount(); a < N; a++) {
                             View child2 = getChildAt(a);
-                            if (child2 instanceof BaseFragment.AttachedSheetWindow) {
+                            if (child2 instanceof BaseFragment.AttachedSheetWindow && !((BaseFragment.AttachedSheetWindow) child2).drawsBelowNavigationBar()) {
                                 drawNavbar = true;
                                 break;
                             }
@@ -348,7 +348,8 @@ public class ActionBarLayout extends FrameLayout implements INavigationLayout, F
                 View child = getChildAt(a);
                 if (!(child instanceof ActionBar)) {
                     if (child instanceof BaseFragment.AttachedSheetWindow) {
-                        measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, getBottomTabsHeight(false) > 0 || !isSupportEdgeToEdge ? 0 : systemAndDisplayInsets.bottom);
+                        boolean drawsBelowNavigationBar = ((BaseFragment.AttachedSheetWindow) child).drawsBelowNavigationBar();
+                        measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, drawsBelowNavigationBar || getBottomTabsHeight(false) > 0 || !isSupportEdgeToEdge ? 0 : systemAndDisplayInsets.bottom);
                     } else if (child.getTag(R.id.sheet_attached_to_fragment_tag) != null || child.getFitsSystemWindows()) {
                         int addHeight = isSupportEdgeToEdge ? systemAndDisplayInsets.bottom : 0;
                         measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, addHeight);

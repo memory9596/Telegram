@@ -132,8 +132,13 @@ public class ShareDialogCell extends FrameLayout implements NotificationCenter.N
         }
 
         nameTextView = new TextView(context) {
+            private boolean plainName;
+
             @Override
             public void setText(CharSequence text, BufferType type) {
+                // Retain the prepared text layout when rebinding an unchanged plain name.
+                if (plainName && text instanceof String && text.length() > 0 && TextUtils.equals(getText(), text)) return;
+                plainName = text instanceof String;
                 text = Emoji.replaceEmoji(text, getPaint().getFontMetricsInt(), false);
                 super.setText(text, type);
             }
