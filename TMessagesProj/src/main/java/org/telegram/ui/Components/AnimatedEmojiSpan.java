@@ -42,6 +42,7 @@ import org.telegram.ui.Components.spoilers.SpoilerEffect;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 
 public class AnimatedEmojiSpan extends ReplacementSpan {
@@ -382,13 +383,10 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
             canvas.translate(0, Emoji.emojiDrawingYOffset + AndroidUtilities.dp(20 * offset));
         }
 
-        long time = System.currentTimeMillis();
-        for (int k = 0; k < stack.backgroundDrawingArray.size(); k++) {
-            SpansChunk chunk = stack.backgroundDrawingArray.get(k);
-            if (chunk.layout == layout) {
-                chunk.draw(canvas, spoilers, time, boundTop, boundBottom, drawingYOffset, alpha, colorFilter);
-                break;
-            }
+        stack.invalidated = false;
+        SpansChunk chunk = stack.groupedByLayout.get(layout);
+        if (chunk != null) {
+            chunk.draw(canvas, spoilers, System.currentTimeMillis(), boundTop, boundBottom, drawingYOffset, alpha, colorFilter);
         }
 
         if (needRestore) {
@@ -429,12 +427,30 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
         public SpansChunk spansChunk;
         public boolean insideSpoiler;
         private int rawIndex;
+        private boolean animationVisible = true;
+        private boolean updated;
+        private boolean hasDrawnBounds;
 
         private ImageReceiver.BackgroundThreadDrawHolder[] backgroundDrawHolder = new ImageReceiver.BackgroundThreadDrawHolder[DrawingInBackgroundThreadDrawable.THREAD_COUNT];
 
         public AnimatedEmojiHolder(View view, boolean invalidateInParent) {
             this.view = new WeakReference<>(view);
             this.invalidateInParent = invalidateInParent;
+        }
+
+        public void setAnimationVisible(boolean visible) {
+            if (animationVisible == visible) return;
+            animationVisible = visible;
+            if (drawable != null) {
+                // Keep shared emoji decoding while any other visible owner remains.
+                if (spansChunk != null) {
+                    spansChunk.group.setDrawableVisible(drawable, visible);
+                } else if (visible) {
+                    drawable.addView(this);
+                } else {
+                    drawable.removeView(this);
+                }
+            }
         }
 
         public boolean outOfBounds(float boundTop, float boundBottom) {
@@ -510,6 +526,11 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
         }
 
         public void invalidate() {
+            if (!animationVisible) return;
+            if (spansChunk != null) {
+                spansChunk.group.invalidate();
+                return;
+            }
             final View view = this.view.get();
             if (view == null) {
                 return;
@@ -556,10 +577,16 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
     public static EmojiGroupedSpans update(int cacheType, View view, boolean invalidateParent, EmojiGroupedSpans prev, boolean clone, Layout... layouts) {
         if (layouts == null || layouts.length <= 0) {
             if (prev != null) {
-                prev.holders.clear();
                 prev.release();
             }
             return null;
+        }
+
+        if (prev != null) {
+            prev.setView(view, invalidateParent);
+            for (int i = 0; i < prev.holders.size(); ++i) {
+                prev.holders.get(i).updated = false;
+            }
         }
 
         for (int l = 0; l < layouts.length; ++l) {
@@ -580,17 +607,12 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
                         ((Spannable) spanned).removeSpan(span);
                         ((Spannable) spanned).setSpan(spans[i] = span = cloneSpan(span, null), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                     }
-                    AnimatedEmojiHolder holder = null;
                     if (prev == null) {
                         prev = new EmojiGroupedSpans();
+                        prev.setView(view, invalidateParent);
                     }
-                    for (int j = 0; j < prev.holders.size(); ++j) {
-                        if (prev.holders.get(j).span == span &&
-                            prev.holders.get(j).layout == textLayout) {
-                            holder = prev.holders.get(j);
-                            break;
-                        }
-                    }
+                    SpansChunk chunk = prev.groupedByLayout.get(textLayout);
+                    AnimatedEmojiHolder holder = chunk == null ? null : chunk.holdersBySpan.get(span);
                     if (holder == null) {
                         holder = new AnimatedEmojiHolder(view, invalidateParent);
                         holder.layout = textLayout;
@@ -615,46 +637,15 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
                         prev.add(textLayout, holder);
                     } else {
                         holder.insideSpoiler = isInsideSpoiler(textLayout, spanned.getSpanStart(span), spanned.getSpanEnd(span));
+                        chunk.viewportOutset = Math.max(chunk.viewportOutset, span.measuredSize / 2f + AndroidUtilities.dp(3));
                     }
-                }
-            }
-
-            if (prev != null) {
-                for (int i = 0; i < prev.holders.size(); ++i) {
-                    AnimatedEmojiHolder holder = prev.holders.get(i);
-                    if (holder.layout == textLayout) {
-                        AnimatedEmojiSpan span = prev.holders.get(i).span;
-                        boolean found = false;
-                        for (int j = 0; spans != null && j < spans.length; ++j) {
-                            if (spans[j] == span) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            prev.remove(i);
-                            i--;
-                        }
-                    }
+                    holder.updated = true;
                 }
             }
         }
 
         if (prev != null) {
-            for (int i = 0; i < prev.holders.size(); ++i) {
-                Layout layout = prev.holders.get(i).layout;
-                boolean found = false;
-                for (int l = 0; l < layouts.length; ++l) {
-                    if (layouts[l] == layout) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    prev.remove(i);
-                    i--;
-                }
-            }
+            prev.removeUnusedHolders();
         }
 
         return prev;
@@ -795,24 +786,174 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
         public ArrayList<AnimatedEmojiHolder> holders = new ArrayList<>();
         HashMap<Layout, SpansChunk> groupedByLayout = new HashMap<>();
         ArrayList<SpansChunk> backgroundDrawingArray = new ArrayList<>();
+        private final IdentityHashMap<AnimatedEmojiDrawable, DrawableReference> drawableReferences = new IdentityHashMap<>();
+        private WeakReference<View> view;
+        private boolean invalidateInParent;
+        private boolean invalidated;
         private int rawIndex;
+        private boolean viewportManaged;
+        private boolean visibleOnScreen = true;
+        private float viewportTop;
+        private float viewportBottom;
+        private boolean deferHiding;
+        private final ArrayList<AnimatedEmojiHolder> pendingHiding = new ArrayList<>();
+
+        private class DrawableReference implements InvalidateHolder {
+            int count;
+            int visibleCount;
+
+            @Override
+            public void invalidate() {
+                if (visibleCount > 0) EmojiGroupedSpans.this.invalidate();
+            }
+        }
+
+        private void setView(View view, boolean invalidateInParent) {
+            if (this.view == null || this.view.get() != view) {
+                this.view = new WeakReference<>(view);
+                invalidated = false;
+                viewportManaged = false;
+            }
+            this.invalidateInParent = invalidateInParent;
+        }
+
+        private void invalidate() {
+            View target = view == null ? null : view.get();
+            if (target == null || invalidated) return;
+            invalidated = true;
+            if (invalidateInParent && target.getParent() instanceof View) {
+                ((View) target.getParent()).invalidate();
+            } else {
+                target.invalidate();
+            }
+        }
+
+        private void attachDrawable(AnimatedEmojiHolder holder) {
+            AnimatedEmojiDrawable drawable = holder.drawable;
+            if (drawable == null) return;
+            DrawableReference reference = drawableReferences.get(drawable);
+            if (reference == null) {
+                reference = new DrawableReference();
+                drawableReferences.put(drawable, reference);
+            }
+            reference.count++;
+            if (holder.animationVisible && reference.visibleCount++ == 0) drawable.addView(reference);
+        }
+
+        private void setDrawableVisible(AnimatedEmojiDrawable drawable, boolean visible) {
+            DrawableReference reference = drawableReferences.get(drawable);
+            if (reference == null) return;
+            if (visible) {
+                if (reference.visibleCount++ == 0) drawable.addView(reference);
+            } else if (--reference.visibleCount == 0) {
+                drawable.removeView(reference);
+            }
+        }
+
+        private void detachDrawable(AnimatedEmojiHolder holder) {
+            AnimatedEmojiDrawable drawable = holder.drawable;
+            if (drawable == null) return;
+            DrawableReference reference = drawableReferences.get(drawable);
+            if (reference == null) return;
+            if (holder.animationVisible && --reference.visibleCount == 0) drawable.removeView(reference);
+            if (--reference.count == 0) drawableReferences.remove(drawable);
+        }
+
+        private void removeUnusedHolders() {
+            int remaining = 0;
+            for (int i = 0; i < holders.size(); ++i) {
+                AnimatedEmojiHolder holder = holders.get(i);
+                if (holder.updated) {
+                    holders.set(remaining++, holder);
+                } else {
+                    holder.spansChunk.holdersBySpan.remove(holder.span);
+                    holder.spansChunk = null;
+                    detachDrawable(holder);
+                }
+            }
+            holders.subList(remaining, holders.size()).clear();
+
+            int remainingChunks = 0;
+            for (int i = 0; i < backgroundDrawingArray.size(); ++i) {
+                SpansChunk chunk = backgroundDrawingArray.get(i);
+                remaining = 0;
+                for (int j = 0; j < chunk.holders.size(); ++j) {
+                    AnimatedEmojiHolder holder = chunk.holders.get(j);
+                    if (holder.updated) chunk.holders.set(remaining++, holder);
+                }
+                chunk.holders.subList(remaining, chunk.holders.size()).clear();
+                chunk.visibleHolders.clear();
+                chunk.visibleHoldersReady = false;
+                chunk.checkBackgroundRendering();
+                if (remaining == 0) {
+                    groupedByLayout.remove(chunk.layout);
+                } else {
+                    backgroundDrawingArray.set(remainingChunks++, chunk);
+                }
+            }
+            backgroundDrawingArray.subList(remainingChunks, backgroundDrawingArray.size()).clear();
+        }
 
         public boolean isEmpty() {
             return holders.isEmpty();
         }
 
+        public void updateVisibility(boolean visible, float top, float bottom) {
+            viewportManaged = true;
+            visibleOnScreen = visible;
+            viewportTop = top;
+            viewportBottom = bottom;
+            // Acquire incoming owners before releasing outgoing ones of a shared emoji.
+            deferHiding = true;
+            for (int i = 0; i < backgroundDrawingArray.size(); i++) {
+                SpansChunk chunk = backgroundDrawingArray.get(i);
+                if (chunk.isOutsideViewport()) {
+                    chunk.hide();
+                    continue;
+                }
+                chunk.hidden = false;
+                chunk.visibleHolders.clear();
+                for (int j = 0; j < chunk.holders.size(); j++) {
+                    AnimatedEmojiHolder holder = chunk.holders.get(j);
+                    float outset = holder.span.measuredSize * Math.max(0, Math.abs(holder.span.getExtraScale()) - 1f) / 2f + AndroidUtilities.dp(3);
+                    boolean inBounds = !holder.hasDrawnBounds || !holder.outOfBounds(
+                        top - holder.drawingYOffset - outset, bottom - holder.drawingYOffset + outset);
+                    if (visible && (inBounds || holder.span.isAnimating())) {
+                        chunk.visibleHolders.add(holder);
+                    }
+                    if (visible && inBounds) {
+                        holder.setAnimationVisible(true);
+                    } else if (holder.animationVisible) {
+                        pendingHiding.add(holder);
+                    }
+                }
+                chunk.visibleHoldersReady = true;
+            }
+            deferHiding = false;
+            for (int i = 0; i < pendingHiding.size(); i++) pendingHiding.get(i).setAnimationVisible(false);
+            pendingHiding.clear();
+        }
+
+        public void updateLayoutPosition(Layout layout, float drawingYOffset) {
+            SpansChunk chunk = groupedByLayout.get(layout);
+            if (chunk == null) return;
+            if (chunk.drawingYOffset != drawingYOffset) chunk.visibleHoldersReady = false;
+            chunk.drawingYOffset = drawingYOffset;
+            chunk.hasDrawingOffset = true;
+            if (chunk.isOutsideViewport()) chunk.hide();
+        }
+
         public void add(Layout layout, AnimatedEmojiHolder holder) {
+            if (view == null) setView(holder.view.get(), holder.invalidateInParent);
             holders.add(holder);
             SpansChunk chunkByLayout = groupedByLayout.get(layout);
             if (chunkByLayout == null) {
-                chunkByLayout = new SpansChunk(holder.view, layout, false);
+                chunkByLayout = new SpansChunk(this, holder.view, layout, false);
                 groupedByLayout.put(layout, chunkByLayout);
                 backgroundDrawingArray.add(chunkByLayout);
             }
             chunkByLayout.add(holder);
-            if (holder.drawable != null) {
-                holder.drawable.addView(holder);
-            }
+            attachDrawable(holder);
         }
 
         public boolean hasLayout(Layout layout) {
@@ -829,9 +970,7 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
                     backgroundDrawingArray.remove(chunkByLayout);
                 }
             }
-            if (holder.drawable != null) {
-                holder.drawable.removeView(holder);
-            }
+            detachDrawable(holder);
         }
 
         public void remove(int i) {
@@ -846,27 +985,47 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
             } else {
                 throw new RuntimeException("!!!");
             }
-            if (holder.drawable != null) {
-                holder.drawable.removeView(holder);
-            }
+            detachDrawable(holder);
         }
 
         public void release() {
-            for (int i = 0; i < holders.size(); i++) {
-                remove(i);
-                i--;
+            for (AnimatedEmojiDrawable drawable : drawableReferences.keySet()) {
+                DrawableReference reference = drawableReferences.get(drawable);
+                if (reference.visibleCount > 0) drawable.removeView(reference);
             }
+            drawableReferences.clear();
+            for (int i = 0; i < holders.size(); i++) {
+                holders.get(i).spansChunk = null;
+            }
+            for (int i = 0; i < backgroundDrawingArray.size(); i++) {
+                backgroundDrawingArray.get(i).release();
+            }
+            holders.clear();
+            groupedByLayout.clear();
+            backgroundDrawingArray.clear();
+            pendingHiding.clear();
+            deferHiding = false;
+            invalidated = false;
+            viewportManaged = false;
         }
 
         public void clearPositions() {
             for (int i = 0; i < holders.size(); i++) {
                 holders.get(i).span.spanDrawn = false;
             }
+            for (int i = 0; i < backgroundDrawingArray.size(); i++) {
+                backgroundDrawingArray.get(i).visibleHoldersReady = false;
+            }
         }
 
         public void recordPositions(boolean record) {
             for (int i = 0; i < holders.size(); i++) {
                 holders.get(i).span.recordPositions = record;
+            }
+            if (record) {
+                for (int i = 0; i < backgroundDrawingArray.size(); i++) {
+                    backgroundDrawingArray.get(i).visibleHoldersReady = false;
+                }
             }
         }
 
@@ -875,8 +1034,11 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
                 SpansChunk chunk = groupedByLayout.remove(oldText);
                 if (chunk != null) {
                     chunk.layout = newText;
+                    chunk.visibleHoldersReady = false;
+                    chunk.hasDrawingOffset = false;
                     for (int i = 0; i < chunk.holders.size(); i++) {
                         chunk.holders.get(i).layout = newText;
+                        chunk.holders.get(i).hasDrawnBounds = false;
                     }
                     groupedByLayout.put(newText, chunk);
                 }
@@ -886,26 +1048,65 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
 
     private static class SpansChunk {
 
+        final EmojiGroupedSpans group;
         Layout layout;
         final WeakReference<View> view;
         ArrayList<AnimatedEmojiHolder> holders = new ArrayList<>();
+        final IdentityHashMap<AnimatedEmojiSpan, AnimatedEmojiHolder> holdersBySpan = new IdentityHashMap<>();
         DrawingInBackgroundThreadDrawable backgroundThreadDrawable;
         private final boolean allowBackgroundRendering;
+        private boolean hasDrawingOffset;
+        private float drawingYOffset;
+        private float viewportOutset;
+        private boolean hidden;
+        private final ArrayList<AnimatedEmojiHolder> visibleHolders = new ArrayList<>();
+        private boolean visibleHoldersReady;
 
-        public SpansChunk(WeakReference<View> view, Layout layout, boolean allowBackgroundRendering) {
+        public SpansChunk(EmojiGroupedSpans group, WeakReference<View> view, Layout layout, boolean allowBackgroundRendering) {
+            this.group = group;
             this.layout = layout;
             this.view = view;
             this.allowBackgroundRendering = allowBackgroundRendering;
         }
 
         public void add(AnimatedEmojiHolder holder) {
+            hidden = false;
+            visibleHoldersReady = false;
             holders.add(holder);
+            holdersBySpan.put(holder.span, holder);
             holder.spansChunk = this;
+            viewportOutset = Math.max(viewportOutset, holder.span.measuredSize / 2f + AndroidUtilities.dp(3));
             checkBackgroundRendering();
+        }
+
+        private boolean isOutsideViewport() {
+            if (!group.viewportManaged) return false;
+            if (!group.visibleOnScreen || layout == null) return true;
+            return hasDrawingOffset && (drawingYOffset + layout.getHeight() + viewportOutset < group.viewportTop
+                    || drawingYOffset - viewportOutset > group.viewportBottom);
+        }
+
+        private void hide() {
+            if (hidden) return;
+            hidden = true;
+            visibleHolders.clear();
+            visibleHoldersReady = false;
+            for (int i = 0; i < holders.size(); i++) {
+                AnimatedEmojiHolder holder = holders.get(i);
+                holder.drawingYOffset = drawingYOffset;
+                holder.skipDraw = true;
+                if (group.deferHiding) {
+                    if (holder.animationVisible) group.pendingHiding.add(holder);
+                } else {
+                    holder.setAnimationVisible(false);
+                }
+            }
         }
 
         public void remove(AnimatedEmojiHolder holder) {
             holders.remove(holder);
+            visibleHolders.remove(holder);
+            holdersBySpan.remove(holder.span);
             holder.spansChunk = null;
             checkBackgroundRendering();
         }
@@ -990,21 +1191,25 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
 
         public void release() {
             holders.clear();
+            visibleHolders.clear();
+            holdersBySpan.clear();
             checkBackgroundRendering();
         }
 
         public void draw(Canvas canvas, List<SpoilerEffect> spoilers, long time, float boundTop, float boundBottom, float drawingYOffset, float alpha, ColorFilter colorFilter) {
-            for (int i = 0; i < holders.size(); ++i) {
-                AnimatedEmojiHolder holder = holders.get(i);
+            if (this.drawingYOffset != drawingYOffset) visibleHoldersReady = false;
+            this.drawingYOffset = drawingYOffset;
+            hasDrawingOffset = true;
+            if (isOutsideViewport()) {
+                hide();
+                return;
+            }
+            hidden = false;
+            final ArrayList<AnimatedEmojiHolder> drawingHolders = group.viewportManaged && visibleHoldersReady ? visibleHolders : holders;
+            for (int i = 0; i < drawingHolders.size(); ++i) {
+                AnimatedEmojiHolder holder = drawingHolders.get(i);
 
-                if (holder == null) {
-                    continue;
-                }
-                AnimatedEmojiDrawable drawable = holder.drawable;
-                if (drawable != null) {
-                    drawable.setColorFilter(colorFilter);
-                }
-                if (!holder.span.spanDrawn) {
+                if (holder == null || !holder.span.spanDrawn) {
                     continue;
                 }
 
@@ -1013,13 +1218,24 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
                 cx = holder.span.lastDrawnCx;
                 cy = holder.span.lastDrawnCy;
                 holder.drawableBounds.set((int) (cx - halfSide), (int) (cy - halfSide), (int) (cx + halfSide), (int) (cy + halfSide));
+                holder.hasDrawnBounds = true;
+
+                // Captions draw all their blocks. Use the chat viewport, which
+                // remains valid when the same cell is captured for a blurred bar.
+                float drawHalfSide = halfSide * Math.abs(holder.span.getExtraScale()) + AndroidUtilities.dp(3);
+                boolean visible = !group.viewportManaged || group.visibleOnScreen
+                    && cy + drawHalfSide + drawingYOffset >= group.viewportTop
+                    && cy - drawHalfSide + drawingYOffset <= group.viewportBottom;
+                holder.setAnimationVisible(visible);
+                holder.skipDraw = !visible;
+                holder.drawingYOffset = drawingYOffset;
+                if (!visible) continue;
 
                 float spoilerAlpha = 1f;
                 if (spoilers != null && !spoilers.isEmpty() && holder.insideSpoiler) {
                     spoilerAlpha = Math.max(0, spoilers.get(0).getRippleProgress());
                 }
 
-                holder.drawingYOffset = drawingYOffset;
                 holder.alpha = spoilerAlpha;
 
                 if (backgroundThreadDrawable == null) {

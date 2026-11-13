@@ -538,6 +538,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 invalidate();
             }
         }
+        if (animatedEmojiStack != null) {
+            animatedEmojiStack.updateVisibility(visibleOnScreen, Math.max(0, clipTop), getMeasuredHeight() - Math.max(0, clipBottom));
+        }
         clipTop -= photoImage.getImageY();
         clipBottom -= (getMeasuredHeight() - photoImage.getImageY2());
         float visibleImageHeight = photoImage.getImageHeight();
@@ -5347,16 +5350,22 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             int newFirst = -1, newLast = -1, newCount = 0;
 
             int startBlock = 0;
+            int blockOffset = 0;
+            int startOffset = 0;
             for (int a = 0; a < currentMessageObject.textLayoutBlocks.size(); a++) {
-                if (currentMessageObject.textLayoutBlocks.get(a).textYOffset(currentMessageObject.textLayoutBlocks, transitionParams) > p) {
+                MessageObject.TextLayoutBlock block = currentMessageObject.textLayoutBlocks.get(a);
+                if (blockOffset > p) {
                     break;
                 }
                 startBlock = a;
+                startOffset = blockOffset;
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
             }
 
+            blockOffset = startOffset;
             for (int a = startBlock; a < currentMessageObject.textLayoutBlocks.size(); a++) {
                 MessageObject.TextLayoutBlock block = currentMessageObject.textLayoutBlocks.get(a);
-                float y = block.textYOffset(currentMessageObject.textLayoutBlocks, transitionParams);
+                float y = blockOffset;
                 if (intersect(y, y + block.padTop + block.height(transitionParams) + block.padBottom, p, p + height)) {
                     if (newFirst == -1) {
                         newFirst = a;
@@ -5366,6 +5375,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 } else if (y > p) {
                     break;
                 }
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
             }
 
             if (lastVisibleBlockNum != newLast || firstVisibleBlockNum != newFirst || totalVisibleBlocksCount != newCount) {
@@ -14140,15 +14150,25 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     canvas.restore();
                 }
             }
+            AnimatedEmojiSpan.EmojiGroupedSpans textEmojiStack = origin ? animatedEmojiStack : transitionParams.animateOutAnimateEmoji;
+            int blockOffset = 0;
+            for (int a = 0; a < firstVisibleBlockNum && a < textLayoutBlocks.size(); a++) {
+                MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+                if (textEmojiStack != null) textEmojiStack.updateLayoutPosition(block.textLayout, textY + blockOffset + block.padTop + transitionYOffsetForDrawables);
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
+            }
             for (int a = firstVisibleBlockNum; a <= lastVisibleBlockNum; a++) {
                 if (a >= textLayoutBlocks.size()) {
                     break;
                 }
                 MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+                int textOffset = blockOffset;
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
+                if (textEmojiStack != null) textEmojiStack.updateLayoutPosition(block.textLayout, textY + textOffset + block.padTop + transitionYOffsetForDrawables);
                 int saveCount = canvas.getSaveCount();
                 canvas.save();
                 final float blockRtl = (block.isRtl() ? rtlOffset - (block.quote ? dp(10) : 0) : 0);
-                canvas.translate(textX - blockRtl, textY + block.textYOffset(textLayoutBlocks, transitionParams) + transitionYOffsetForDrawables + block.padTop);
+                canvas.translate(textX - blockRtl, textY + textOffset + transitionYOffsetForDrawables + block.padTop);
                 if (a == linkBlockNum && !explanation || a == linkExplanationBlockNum && explanation) {
                     if (!drawOnlyText && links.draw(canvas)) {
                         invalidate();
@@ -18805,6 +18825,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         right -= dp(10 + (currentMessageObject.isOutOwner() && !mediaBackground && !drawPinnedBottom ? 6 : 0)) + getExtraTextX();
         final float maxWidth = right - textX;
 
+        int blockOffset = 0;
+        for (int a = 0; a < firstVisibleBlockNum && a < textLayoutBlocks.size(); a++) {
+            MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+            if (stack != null) stack.updateLayoutPosition(block.textLayout, textY + blockOffset + block.padTop + transitionYOffsetForDrawables);
+            blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
+        }
         for (int a = firstVisibleBlockNum; a <= lastVisibleBlockNum; a++) {
             if (a >= textLayoutBlocks.size()) {
                 break;
@@ -18813,10 +18839,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 continue;
             }
             MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+            int textOffset = blockOffset;
+            blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
             int saveCount = canvas.getSaveCount();
             canvas.save();
-            canvas.translate(textX - (block.isRtl() ? (int) Math.ceil(rtlOffset) : 0), textY + block.padTop + block.textYOffset(textLayoutBlocks, transitionParams) + transitionYOffsetForDrawables);
-            float drawingYOffset = textY + block.textYOffset(textLayoutBlocks, transitionParams) + transitionYOffsetForDrawables;
+            float drawingYOffset = textY + block.padTop + textOffset + transitionYOffsetForDrawables;
+            canvas.translate(textX - (block.isRtl() ? (int) Math.ceil(rtlOffset) : 0), drawingYOffset);
             float top = 0; // parentBoundsTop - getY() - drawingYOffset + dp(20);
             float bottom = 0; // parentBoundsBottom - getY() - drawingYOffset - dp(20);
             if (transitionParams.messageEntering) {
