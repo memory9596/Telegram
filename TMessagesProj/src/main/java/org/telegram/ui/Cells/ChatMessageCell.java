@@ -547,7 +547,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (clipBottom > 0) {
             visibleImageHeight -= clipBottom;
         }
-        photoImage.setSkipUpdateFrame(skipFrameUpdate = visibleImageHeight / photoImage.getImageHeight() < 0.25f);
+        final boolean imageVisible = visibleOnScreen && photoImage.getImageHeight() > 0 && visibleImageHeight > 0;
+        photoImage.setAnimationVisible(imageVisible);
+        photoImage.setSkipUpdateFrame(skipFrameUpdate = !imageVisible || visibleImageHeight / photoImage.getImageHeight() < 0.25f);
     }
 
     public void setParentBounds(float chatListViewPaddingTop, int blurredViewBottomOffset) {

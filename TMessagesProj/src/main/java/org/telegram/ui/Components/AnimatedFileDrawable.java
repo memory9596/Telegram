@@ -132,6 +132,7 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
     private final ReferenceList<View> secondParentViews = new ReferenceList<>(true);
 
     private final ReferenceList<ImageReceiver> parents = new ReferenceList<>(true);
+    private volatile boolean hasVisibleParents;
 
     private AnimatedFileDrawableStream stream;
 
@@ -215,7 +216,12 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
     @UiThread
     public void invalidateInternal() {
         for (ImageReceiver imageReceiver : parents) {
-            imageReceiver.invalidate();
+            if (imageReceiver.isAnimationVisible()) {
+                imageReceiver.invalidate();
+            }
+        }
+        for (View view : secondParentViews) {
+            view.invalidate();
         }
     }
 
@@ -303,6 +309,7 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
                 count++;
             }
         }
+        onParentVisibilityChanged();
         if (oCount == count) {
             stop();
         } else {
@@ -578,11 +585,13 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
                 }
             }
         }
+        onParentVisibilityChanged();
         checkCacheCancel();
     }
 
     public void removeParent(ImageReceiver imageReceiver) {
         parents.remove(imageReceiver);
+        onParentVisibilityChanged();
         if (parents.isEmpty()) {
             repeatCount = 0;
         }
@@ -590,6 +599,26 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
     }
 
     private Runnable cancelCache;
+
+    @UiThread
+    public void onParentVisibilityChanged() {
+        // PhotoViewer can use the drawable through a secondary view while the chat cell is hidden.
+        boolean visible = !secondParentViews.isEmpty();
+        // ReferenceList releases its iteration semaphore only when hasNext() reaches the end.
+        // Do not break after finding a visible parent: invalidateInternal() iterates it again.
+        for (ImageReceiver parent : parents) {
+            visible |= parent.isAnimationVisible();
+        }
+        if (hasVisibleParents == visible) return;
+        hasVisibleParents = visible;
+        if (visible) {
+            ticksWithoutDraw = 0;
+            isPaused = false;
+            scheduleNextGetFrame();
+            invalidateInternal();
+        }
+        checkChoreographer();
+    }
 
     public void checkCacheCancel() {
         if (bitmapsCache == null) {
@@ -615,11 +644,13 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
     public void addSecondParentView(View view) {
         if (view != null) {
             secondParentViews.add(view);
+            onParentVisibilityChanged();
         }
     }
 
     public void removeSecondParentView(View view) {
         secondParentViews.remove(view);
+        onParentVisibilityChanged();
         if (secondParentViews.isEmpty()) {
             if (recycleWithSecond) {
                 recycle();
@@ -826,7 +857,7 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
             || !canLoadFrames()
             || destroyWhenDone
             || !isRunning && (!decodeSingleFrame || singleFrameDecoded)
-            || parents.isEmpty()
+            || !hasVisibleParents
             || generatingCache;
 
         if (ignoreScheduleNext) {
@@ -1397,7 +1428,7 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
 
     @UiThread
     private void checkChoreographerInternal() {
-        if (isRunning && !isPaused && !isStaticVideoDetected) {
+        if (isRunning && hasVisibleParents && !isPaused && !isStaticVideoDetected) {
             if (!isChoreographerRegistered) {
                 final int fps = metaData[5];
                 if (fps <= 0) {

@@ -294,6 +294,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
     private int currentCacheType;
     private boolean allowLottieVibration = true;
     private boolean allowStartAnimation = true;
+    private boolean animationVisible = true;
     private boolean allowStartLottieAnimation = true;
     public boolean useSharedAnimationQueue;
     private boolean allowDecodeSingleFrame;
@@ -3269,6 +3270,18 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
 
     public void setSkipUpdateFrame(boolean skipUpdateFrame) {
         this.skipUpdateFrame = skipUpdateFrame;
+    }
+
+    /** Screen visibility, independent of temporary draw passes such as blur capture. */
+    public void setAnimationVisible(boolean visible) {
+        if (animationVisible == visible) return;
+        animationVisible = visible;
+        AnimatedFileDrawable animation = getAnimation();
+        if (animation != null) animation.onParentVisibilityChanged();
+    }
+
+    public boolean isAnimationVisible() {
+        return animationVisible;
     }
 
     public void setCurrentTime(long time) {
