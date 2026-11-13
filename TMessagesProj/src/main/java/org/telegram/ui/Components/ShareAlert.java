@@ -1489,7 +1489,15 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         gridView.setClipToPadding(false);
         gridView.setLayoutManager(layoutManager = new GridLayoutManager(getContext(), 4));
 
-        iBlur3Capture = (canvas, position) -> Blur3Utils.captureRelativeParent(gridView, canvas, position, gridView, containerView);
+        iBlur3Capture = (canvas, position) -> {
+            final boolean wasDrawingBlur = SizeNotifierFrameLayout.drawingBlur;
+            SizeNotifierFrameLayout.drawingBlur = true;
+            try {
+                Blur3Utils.captureRelativeParent(gridView, canvas, position, gridView, containerView);
+            } finally {
+                SizeNotifierFrameLayout.drawingBlur = wasDrawingBlur;
+            }
+        };
 
         layoutManager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
             @Override

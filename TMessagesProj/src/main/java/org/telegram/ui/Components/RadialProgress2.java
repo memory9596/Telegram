@@ -241,6 +241,9 @@ public class RadialProgress2 {
     }
 
     private void invalidateParent() {
+        if (parent == null) {
+            return;
+        }
         int offset = AndroidUtilities.dp(2);
         parent.invalidate((int) progressRect.left - offset, (int) progressRect.top - offset, (int) progressRect.right + offset * 2, (int) progressRect.bottom + offset * 2);
     }
