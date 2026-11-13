@@ -366,6 +366,56 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
         }
     }
 
+    /** Restores span positions when a text layout's display list is replayed without Layout.draw. */
+    public static final class CachedPositions {
+        private final AnimatedEmojiSpan[] spans;
+        private final float[] positions;
+        private final boolean[] drawn;
+
+        public CachedPositions(CharSequence text) {
+            spans = text instanceof Spanned ? ((Spanned) text).getSpans(0, text.length(), AnimatedEmojiSpan.class) : new AnimatedEmojiSpan[0];
+            positions = new float[spans.length * 2];
+            drawn = new boolean[spans.length];
+        }
+
+        public boolean canCache() {
+            if (lockPositionChanging) {
+                return false;
+            }
+            for (AnimatedEmojiSpan span : spans) {
+                if (!span.recordPositions || span.isAnimating()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public void record() {
+            for (int i = 0; i < spans.length; i++) {
+                positions[i * 2] = spans[i].lastDrawnCx;
+                positions[i * 2 + 1] = spans[i].lastDrawnCy;
+                drawn[i] = spans[i].spanDrawn;
+            }
+        }
+
+        public void restore() {
+            if (!canCache()) {
+                return;
+            }
+            for (int i = 0; i < spans.length; i++) {
+                if (!drawn[i]) {
+                    continue;
+                }
+                AnimatedEmojiSpan span = spans[i];
+                float cx = positions[i * 2], cy = positions[i * 2 + 1];
+                span.positionChanged |= span.lastDrawnCx != cx || span.lastDrawnCy != cy;
+                span.lastDrawnCx = cx;
+                span.lastDrawnCy = cy;
+                span.spanDrawn = true;
+            }
+        }
+    }
+
     public static void drawAnimatedEmojis(Canvas canvas, Layout layout, EmojiGroupedSpans stack, float offset, List<SpoilerEffect> spoilers, float boundTop, float boundBottom, float drawingYOffset, float alpha) {
         drawAnimatedEmojis(canvas, layout, stack, offset, spoilers, boundTop, boundBottom, drawingYOffset, alpha, null);
     }

@@ -217,7 +217,9 @@ class ChatMessagePoll {
                         Theme.chat_replyNamePaint, maxWidth - dp(30), Layout.Alignment.ALIGN_NORMAL, 1.0f, 0.0f, false);
                 cell.explanationLayout = new MessageObject.TextLayoutBlocks(messageObject, currentExplanation, Theme.chat_quoteTextPaint, explanationWidth - dp(11));
                 explanationHeight = cell.explanationLayout.textHeight() + dp(26 + 8 + 3) + (explanationContentHeight > 0 ? explanationContentHeight + dp(8 + 6) : 0);
-                cell.animatedEmojiPollExplanation = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, cell, false, cell.animatedEmojiPollExplanation, cell.explanationLayout.textLayoutBlocks);
+                if (cell.imageReceiversAttachState) {
+                    cell.animatedEmojiPollExplanation = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, cell, false, cell.animatedEmojiPollExplanation, cell.explanationLayout.textLayoutBlocks);
+                }
             }
         } else {
             TLRPC.TL_messageMediaToDo media = (TLRPC.TL_messageMediaToDo) m;
@@ -256,7 +258,9 @@ class ChatMessagePoll {
             MessageObject.addEntitiesToText(questionText, title.entities, cell.currentMessageObject.isOutOwner(), false, false, false);
         }
         cell.titleLayout = new StaticLayout(questionText, Theme.chat_audioTitlePaint, maxWidth + dp(2) - cell.getExtraTextX() * 2, Layout.Alignment.ALIGN_NORMAL, 1.0f, 0.0f, false);
-        cell.animatedEmojiPollQuestion = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, cell, false, cell.animatedEmojiPollQuestion, cell.titleLayout);
+        if (cell.imageReceiversAttachState) {
+            cell.animatedEmojiPollQuestion = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, cell, false, cell.animatedEmojiPollQuestion, cell.titleLayout);
+        }
         boolean titleRtl = false;
         if (cell.titleLayout != null) {
             for (int a = 0, N = cell.titleLayout.getLineCount(); a < N; a++) {

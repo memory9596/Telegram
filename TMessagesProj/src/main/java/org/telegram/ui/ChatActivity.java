@@ -6216,6 +6216,11 @@ public class ChatActivity extends BaseFragment implements
                         cell.clipToGroupBounds = true;
                         result = super.drawChild(canvas, child, drawingTime);
                         cell.clipToGroupBounds = false;
+                    } else if (cell != null && canvas.isHardwareAccelerated() && cell.clipsCaptionToParentBounds()) {
+                        final int restore = canvas.save();
+                        canvas.clipRect(0, 0, getWidth(), getHeight());
+                        result = super.drawChild(canvas, child, drawingTime);
+                        canvas.restoreToCount(restore);
                     } else {
                         result = super.drawChild(canvas, child, drawingTime);
                     }
