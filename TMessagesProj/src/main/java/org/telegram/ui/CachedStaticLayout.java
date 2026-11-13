@@ -14,6 +14,7 @@ import androidx.core.graphics.ColorUtils;
 
 import org.telegram.messenger.Emoji;
 import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.Components.AnimatedEmojiSpan;
 
 public class CachedStaticLayout {
 
@@ -30,10 +31,33 @@ public class CachedStaticLayout {
     }
 
     private RenderNode renderNode;
+    private AnimatedEmojiSpan.CachedPositions emojiPositions;
+
+    public CachedStaticLayout cacheEmojiPositions() {
+        emojiPositions = new AnimatedEmojiSpan.CachedPositions(layout.getText());
+        // This opt-in is for stable layouts whose span positions are cached as well.
+        cachedEmojiSpans = getText() instanceof Spanned
+                ? ((Spanned) getText()).getSpans(0, getText().length(), Emoji.EmojiSpan.class)
+                : new Emoji.EmojiSpan[0];
+        return this;
+    }
+
+    public void clear() {
+        if (renderNode != null) {
+            renderNode.discardDisplayList();
+            renderNode = null;
+        }
+    }
 
     public void draw(Canvas canvas) {
+        if (emojiPositions != null && !emojiPositions.canCache()) {
+            clear();
+            layout.draw(canvas);
+            return;
+        }
         if (!disabled && canvas.isHardwareAccelerated() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && canvas.quickReject(0, 0, layout.getWidth(), layout.getHeight())) {
+                if (emojiPositions != null) emojiPositions.restore();
                 return;
             }
             if (hasChanges() || renderNode == null || !renderNode.hasDisplayList()) {
@@ -44,14 +68,19 @@ public class CachedStaticLayout {
                 renderNode.setPosition(getLayoutBounds());
                 Canvas cacheCanvas = renderNode.beginRecording();
                 int color = layout.getPaint().getColor();
-                layout.getPaint().setColor(ColorUtils.setAlphaComponent(color, 0xFF));
-                layout.draw(cacheCanvas);
-                layout.getPaint().setColor(color);
-                renderNode.endRecording();
+                try {
+                    layout.getPaint().setColor(ColorUtils.setAlphaComponent(color, 0xFF));
+                    layout.draw(cacheCanvas);
+                    if (emojiPositions != null) emojiPositions.record();
+                } finally {
+                    layout.getPaint().setColor(color);
+                    renderNode.endRecording();
+                }
             }
 
             renderNode.setAlpha(layout.getPaint().getAlpha() / 255.0f);
             canvas.drawRenderNode(renderNode);
+            if (emojiPositions != null) emojiPositions.restore();
             return;
         }
 
@@ -65,12 +94,14 @@ public class CachedStaticLayout {
     private final Rect lastLayoutBounds = new Rect();
     private boolean[] lastEmojiLoaded;
     private boolean[] tempEmojiLoaded;
+    private Emoji.EmojiSpan[] cachedEmojiSpans;
 
     private boolean[] getEmojiLoaded() {
         if (!(getText() instanceof Spanned)) {
             return null;
         }
-        Emoji.EmojiSpan[] spans = ((Spanned) getText()).getSpans(0, getText().length(), Emoji.EmojiSpan.class);
+        Emoji.EmojiSpan[] spans = cachedEmojiSpans != null ? cachedEmojiSpans
+                : ((Spanned) getText()).getSpans(0, getText().length(), Emoji.EmojiSpan.class);
         if (spans == null || spans.length <= 0)
             return null;
         if (tempEmojiLoaded == null || tempEmojiLoaded.length != spans.length) {
@@ -97,23 +128,29 @@ public class CachedStaticLayout {
     }
 
     private boolean hasChanges() {
-        boolean a = false, b = false, c = false, d = false, e = false, f = false;
-        boolean[] emojiLoaded = null;
+        // Snapshot emoji loading even when a paint change already invalidates the display list.
+        // Otherwise the next draw unnecessarily rebuilds the same freshly recorded layout.
+        boolean[] emojiLoaded = getEmojiLoaded();
         if (
-            (a = (ColorUtils.setAlphaComponent(textColor, 0xFF) != ColorUtils.setAlphaComponent(layout.getPaint().getColor(), 0xFF))) ||
-            (b = (ColorUtils.setAlphaComponent(linkColor, 0xFF) != ColorUtils.setAlphaComponent(layout.getPaint().linkColor, 0xFF))) ||
-            (c = (Math.abs(textSize - layout.getPaint().getTextSize()) > 0.1f)) ||
-            (d = (typeface != layout.getPaint().getTypeface())) ||
-            (e = (!lastLayoutBounds.equals(getLayoutBounds()))) ||
-            (f = (!emojiLoadedEquals(emojiLoaded = getEmojiLoaded(), lastEmojiLoaded)))
+            (ColorUtils.setAlphaComponent(textColor, 0xFF) != ColorUtils.setAlphaComponent(layout.getPaint().getColor(), 0xFF)) ||
+            (ColorUtils.setAlphaComponent(linkColor, 0xFF) != ColorUtils.setAlphaComponent(layout.getPaint().linkColor, 0xFF)) ||
+            (Math.abs(textSize - layout.getPaint().getTextSize()) > 0.1f) ||
+            (typeface != layout.getPaint().getTypeface()) ||
+            (!lastLayoutBounds.equals(getLayoutBounds())) ||
+            (!emojiLoadedEquals(emojiLoaded, lastEmojiLoaded))
         ) {
             textColor = layout.getPaint().getColor();
             linkColor = layout.getPaint().linkColor;
             textSize = layout.getPaint().getTextSize();
             typeface = layout.getPaint().getTypeface();
             lastLayoutBounds.set(getLayoutBounds());
-            if (emojiLoaded != null) {
-                lastEmojiLoaded = emojiLoaded.clone();
+            if (emojiLoaded == null) {
+                lastEmojiLoaded = null;
+            } else {
+                if (lastEmojiLoaded == null || lastEmojiLoaded.length != emojiLoaded.length) {
+                    lastEmojiLoaded = new boolean[emojiLoaded.length];
+                }
+                System.arraycopy(emojiLoaded, 0, lastEmojiLoaded, 0, emojiLoaded.length);
             }
             return true;
         }
