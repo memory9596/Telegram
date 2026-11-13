@@ -284,6 +284,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     public boolean shouldCheckVisibleOnScreen;
     public float parentBoundsTop;
     public int parentBoundsBottom;
+    private final Rect animatedEmojiClipBounds = new Rect();
 
     public ExpiredStoryView expiredStoryView;
     private boolean skipFrameUpdate;
@@ -537,6 +538,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             if (visibleOnScreen) {
                 invalidate();
             }
+        }
+        if (animatedEmojiStack != null) {
+            animatedEmojiStack.updateVisibility(visibleOnScreen, Math.max(0, clipTop), getMeasuredHeight() - Math.max(0, clipBottom));
         }
         clipTop -= photoImage.getImageY();
         clipBottom -= (getMeasuredHeight() - photoImage.getImageY2());
@@ -1011,6 +1015,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             if (pollButtonDrawable != null) {
                 pollButtonDrawable.attach();
             }
+            animatedEmoji = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, ChatMessageCell.this, false, animatedEmoji, title);
+            animateTitleEmoji = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, ChatMessageCell.this, false, animateTitleEmoji, animateTitle);
         }
 
         public void detach() {
@@ -1020,6 +1026,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             if (pollButtonDrawable != null) {
                 pollButtonDrawable.detach();
             }
+            AnimatedEmojiSpan.release(ChatMessageCell.this, animatedEmoji);
+            AnimatedEmojiSpan.release(ChatMessageCell.this, animateTitleEmoji);
         }
 
         public void destroy() {
@@ -5346,16 +5354,22 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             int newFirst = -1, newLast = -1, newCount = 0;
 
             int startBlock = 0;
+            int blockOffset = 0;
+            int startOffset = 0;
             for (int a = 0; a < currentMessageObject.textLayoutBlocks.size(); a++) {
-                if (currentMessageObject.textLayoutBlocks.get(a).textYOffset(currentMessageObject.textLayoutBlocks, transitionParams) > p) {
+                MessageObject.TextLayoutBlock block = currentMessageObject.textLayoutBlocks.get(a);
+                if (blockOffset > p) {
                     break;
                 }
                 startBlock = a;
+                startOffset = blockOffset;
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
             }
 
+            blockOffset = startOffset;
             for (int a = startBlock; a < currentMessageObject.textLayoutBlocks.size(); a++) {
                 MessageObject.TextLayoutBlock block = currentMessageObject.textLayoutBlocks.get(a);
-                float y = block.textYOffset(currentMessageObject.textLayoutBlocks, transitionParams);
+                float y = blockOffset;
                 if (intersect(y, y + block.padTop + block.height(transitionParams) + block.padBottom, p, p + height)) {
                     if (newFirst == -1) {
                         newFirst = a;
@@ -5365,6 +5379,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 } else if (y > p) {
                     break;
                 }
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
             }
 
             if (lastVisibleBlockNum != newLast || firstVisibleBlockNum != newFirst || totalVisibleBlocksCount != newCount) {
@@ -6161,6 +6176,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 }
                 animatedEmojiReplyStack = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiReplyStack, drawCompactReply && compactReplyRow != null ? compactReplyRow.text : replyTextLayout);
                 animatedEmojiDescriptionStack = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiDescriptionStack, descriptionLayout);
+                if (currentMessageObject != null && currentMessageObject.type == MessageObject.TYPE_POLL) {
+                    animatedEmojiPollQuestion = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiPollQuestion, titleLayout);
+                    if (explanationLayout != null) {
+                        animatedEmojiPollExplanation = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiPollExplanation, explanationLayout.textLayoutBlocks);
+                    }
+                }
                 updateAnimatedEmojis();
             } else {
                 radialProgress.onDetachedFromWindow();
@@ -6194,6 +6215,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 AnimatedEmojiSpan.release(this, animatedEmojiDescriptionStack);
                 AnimatedEmojiSpan.release(this, animatedEmojiReplyStack);
                 AnimatedEmojiSpan.release(this, animatedEmojiStack);
+                AnimatedEmojiSpan.release(this, animatedEmojiPollQuestion);
+                AnimatedEmojiSpan.release(this, animatedEmojiPollExplanation);
             }
         }
 
@@ -6633,6 +6656,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             captionOffsetX = 0;
             currentCaption = null;
             explanationLayout = null;
+            AnimatedEmojiSpan.release(this, animatedEmojiPollQuestion);
+            AnimatedEmojiSpan.release(this, animatedEmojiPollExplanation);
             if (poll != null) {
                 poll.explanationTitleLayout = null;
                 poll.currentExplanation = null;
@@ -7742,7 +7767,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                                 restLines = restLinesCount;
                                 descriptionLayout = generateStaticLayout(text, Theme.chat_replyTextPaint, linkPreviewMaxWidth - (isRTL ? smallImageSide + 2 * smallSideMargin : 0), linkPreviewMaxWidth - smallImageSide - 2 * smallSideMargin, restLinesCount, maxLines);
                             }
-                            animatedEmojiDescriptionStack = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiDescriptionStack, descriptionLayout);
+                            if (imageReceiversAttachState) {
+                                animatedEmojiDescriptionStack = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiDescriptionStack, descriptionLayout);
+                            }
 
                             int height = descriptionLayout.getLineBottom(descriptionLayout.getLineCount() - 1);
                             linkPreviewHeight += height;
@@ -14154,15 +14181,29 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     canvas.restore();
                 }
             }
+            AnimatedEmojiSpan.EmojiGroupedSpans textEmojiStack = origin ? animatedEmojiStack : transitionParams.animateOutAnimateEmoji;
+            int blockOffset = 0;
+            for (int a = 0; a < firstVisibleBlockNum && a < textLayoutBlocks.size(); a++) {
+                MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+                if (textEmojiStack != null) textEmojiStack.updateLayoutPosition(block.textLayout, textY + blockOffset + block.padTop + transitionYOffsetForDrawables);
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
+            }
             for (int a = firstVisibleBlockNum; a <= lastVisibleBlockNum; a++) {
                 if (a >= textLayoutBlocks.size()) {
                     break;
                 }
                 MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+                int textOffset = blockOffset;
+                blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
+                if (textEmojiStack != null) textEmojiStack.updateLayoutPosition(block.textLayout, textY + textOffset + block.padTop + transitionYOffsetForDrawables);
+                final float blockY = textY + textOffset + transitionYOffsetForDrawables;
+                if (caption && !isTextBlockVisible(canvas, block, blockY)) {
+                    continue;
+                }
                 int saveCount = canvas.getSaveCount();
                 canvas.save();
                 final float blockRtl = (block.isRtl() ? rtlOffset - (block.quote ? dp(10) : 0) : 0);
-                canvas.translate(textX - blockRtl, textY + block.textYOffset(textLayoutBlocks, transitionParams) + transitionYOffsetForDrawables + block.padTop);
+                canvas.translate(textX - blockRtl, blockY + block.padTop);
                 if (a == linkBlockNum && !explanation || a == linkExplanationBlockNum && explanation) {
                     if (!drawOnlyText && links.draw(canvas)) {
                         invalidate();
@@ -16939,7 +16980,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                         if (hasReplyQuote || getMessageObject().replyMessageObject != null && !getMessageObject().replyMessageObject.isSpoilersRevealed) {
                             SpoilerEffect.addSpoilers(this, replyTextLayout, replyTextOffset, replyTextOffset + replyTextWidth, replySpoilersPool, replySpoilers);
                         }
-                        animatedEmojiReplyStack = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiReplyStack, replyTextLayout);
+                        if (imageReceiversAttachState) {
+                            animatedEmojiReplyStack = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiReplyStack, replyTextLayout);
+                        }
                     }
                     if (replyNameWidth > replyTextWidth) {
                         replyNameWidth += dp(Math.max(2, SharedConfig.bubbleRadius / 4f));
@@ -18732,6 +18775,16 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         drawSummarizeButton(canvas);
     }
 
+    private boolean isTextBlockVisible(Canvas canvas, MessageObject.TextLayoutBlock block, float top) {
+        if (!canvas.getClipBounds(animatedEmojiClipBounds)) {
+            return false;
+        }
+        // Include quote decorations, code headers/copy buttons and emoji extending beyond the text.
+        final int margin = dp(block.code ? 48 : 16);
+        final float bottom = top + block.padTop + Math.max(block.height, block.height(transitionParams)) + block.padBottom;
+        return top - margin <= animatedEmojiClipBounds.bottom && bottom + margin >= animatedEmojiClipBounds.top;
+    }
+
     public void drawAnimatedEmojis(Canvas canvas, float alpha) {
         drawAnimatedEmojiMessageText(canvas, alpha);
         if (shouldDrawCaptionLayout()) {
@@ -18819,6 +18872,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         right -= dp(10 + (currentMessageObject.isOutOwner() && !mediaBackground && !drawPinnedBottom ? 6 : 0)) + getExtraTextX();
         final float maxWidth = right - textX;
 
+        int blockOffset = 0;
+        for (int a = 0; a < firstVisibleBlockNum && a < textLayoutBlocks.size(); a++) {
+            MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+            if (stack != null) stack.updateLayoutPosition(block.textLayout, textY + blockOffset + block.padTop + transitionYOffsetForDrawables);
+            blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
+        }
         for (int a = firstVisibleBlockNum; a <= lastVisibleBlockNum; a++) {
             if (a >= textLayoutBlocks.size()) {
                 break;
@@ -18827,10 +18886,15 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 continue;
             }
             MessageObject.TextLayoutBlock block = textLayoutBlocks.get(a);
+            int textOffset = blockOffset;
+            blockOffset += block.padTop + block.height(transitionParams) + block.padBottom;
+            float drawingYOffset = textY + block.padTop + textOffset + transitionYOffsetForDrawables;
+            if (drawAllBlocks && !isTextBlockVisible(canvas, block, drawingYOffset - block.padTop)) {
+                continue;
+            }
             int saveCount = canvas.getSaveCount();
             canvas.save();
-            canvas.translate(textX - (block.isRtl() ? (int) Math.ceil(rtlOffset) : 0), textY + block.padTop + block.textYOffset(textLayoutBlocks, transitionParams) + transitionYOffsetForDrawables);
-            float drawingYOffset = textY + block.textYOffset(textLayoutBlocks, transitionParams) + transitionYOffsetForDrawables;
+            canvas.translate(textX - (block.isRtl() ? (int) Math.ceil(rtlOffset) : 0), drawingYOffset);
             float top = 0; // parentBoundsTop - getY() - drawingYOffset + dp(20);
             float bottom = 0; // parentBoundsBottom - getY() - drawingYOffset - dp(20);
             if (transitionParams.messageEntering) {
@@ -18887,11 +18951,16 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 captionX += transitionParams.deltaLeft;
             }
         }
-        if (transitionParams.animateReplaceCaptionLayout && transitionParams.animateChangeProgress != 1f) {
-            drawAnimatedEmojiMessageText(captionX, captionY, canvas, transitionParams.animateOutCaptionLayout != null ? transitionParams.animateOutCaptionLayout.textLayoutBlocks : null, transitionParams.animateOutAnimateEmoji, false, alpha * (1f - transitionParams.animateChangeProgress), transitionParams.animateOutCaptionLayout != null ? transitionParams.animateOutCaptionLayout.textXOffset : 0, true);
-            drawAnimatedEmojiMessageText(captionX, captionY, canvas, captionLayout != null ? captionLayout.textLayoutBlocks : null, animatedEmojiStack, true, alpha * transitionParams.animateChangeProgress, captionLayout != null ? captionLayout.textXOffset : 0, true);
-        } else {
-            drawAnimatedEmojiMessageText(captionX, captionY, canvas, captionLayout != null ? captionLayout.textLayoutBlocks : null, animatedEmojiStack, true, alpha, captionLayout != null ? captionLayout.textXOffset : 0, true);
+        int restore = canvas.save();
+        try {
+            if (transitionParams.animateReplaceCaptionLayout && transitionParams.animateChangeProgress != 1f) {
+                drawAnimatedEmojiMessageText(captionX, captionY, canvas, transitionParams.animateOutCaptionLayout != null ? transitionParams.animateOutCaptionLayout.textLayoutBlocks : null, transitionParams.animateOutAnimateEmoji, false, alpha * (1f - transitionParams.animateChangeProgress), transitionParams.animateOutCaptionLayout != null ? transitionParams.animateOutCaptionLayout.textXOffset : 0, true);
+                drawAnimatedEmojiMessageText(captionX, captionY, canvas, captionLayout != null ? captionLayout.textLayoutBlocks : null, animatedEmojiStack, true, alpha * transitionParams.animateChangeProgress, captionLayout != null ? captionLayout.textXOffset : 0, true);
+            } else {
+                drawAnimatedEmojiMessageText(captionX, captionY, canvas, captionLayout != null ? captionLayout.textLayoutBlocks : null, animatedEmojiStack, true, alpha, captionLayout != null ? captionLayout.textXOffset : 0, true);
+            }
+        } finally {
+            canvas.restoreToCount(restore);
         }
     }
 
@@ -20534,22 +20603,27 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     public void drawCaptionLayout(Canvas canvas, boolean selectionOnly, float alpha) {
-        if (animatedEmojiStack != null && !(canvas instanceof SizeNotifierFrameLayout.SimplerCanvas) && (captionLayout != null || transitionParams.animateOutCaptionLayout != null)) {
-            animatedEmojiStack.clearPositions();
-        }
-        if (transitionParams.animateReplaceCaptionLayout && transitionParams.animateChangeProgress != 1f) {
-            drawCaptionLayout(canvas, transitionParams.animateOutCaptionLayout, false, selectionOnly, alpha * (1f - transitionParams.animateChangeProgress));
-            drawCaptionLayout(canvas, captionLayout, true, selectionOnly, alpha * transitionParams.animateChangeProgress);
-        } else {
-            drawCaptionLayout(canvas, captionLayout, true, selectionOnly, alpha);
-        }
+        int restore = canvas.save();
+        try {
+            if (animatedEmojiStack != null && !(canvas instanceof SizeNotifierFrameLayout.SimplerCanvas) && (captionLayout != null || transitionParams.animateOutCaptionLayout != null)) {
+                animatedEmojiStack.clearPositions(false);
+            }
+            if (transitionParams.animateReplaceCaptionLayout && transitionParams.animateChangeProgress != 1f) {
+                drawCaptionLayout(canvas, transitionParams.animateOutCaptionLayout, false, selectionOnly, alpha * (1f - transitionParams.animateChangeProgress));
+                drawCaptionLayout(canvas, captionLayout, true, selectionOnly, alpha * transitionParams.animateChangeProgress);
+            } else {
+                drawCaptionLayout(canvas, captionLayout, true, selectionOnly, alpha);
+            }
 
-        if (!selectionOnly) {
-            drawAnimatedEmojiCaption(canvas, alpha);
-        }
+            if (!selectionOnly) {
+                drawAnimatedEmojiCaption(canvas, alpha);
+            }
 
-        if (currentMessageObject != null && currentMessageObject.messageOwner != null && currentMessageObject.isVoiceTranscriptionOpen() && !currentMessageObject.messageOwner.voiceTranscriptionFinal && TranscribeButton.isTranscribing(currentMessageObject)) {
-            invalidate();
+            if (currentMessageObject != null && currentMessageObject.messageOwner != null && currentMessageObject.isVoiceTranscriptionOpen() && !currentMessageObject.messageOwner.voiceTranscriptionFinal && TranscribeButton.isTranscribing(currentMessageObject)) {
+                invalidate();
+            }
+        } finally {
+            canvas.restoreToCount(restore);
         }
     }
 
