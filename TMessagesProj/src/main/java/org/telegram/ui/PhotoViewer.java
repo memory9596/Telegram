@@ -1337,8 +1337,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
     private static class SavedVideoPosition {
 
-        public final float position;
-        public final long timestamp;
+        public float position;
+        public long timestamp;
 
         public SavedVideoPosition(float position, long timestamp) {
             this.position = position;
@@ -1539,6 +1539,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         @Override
         public void run() {
             if (videoPlayer != null || photoViewerWebView != null && photoViewerWebView.isControllable()) {
+                if (shouldSavePositionForCurrentVideoShortTerm != null && getVideoDuration() > 0) {
+                    saveProgress(currentMessageObject, getCurrentVideoPosition() / (float) getVideoDuration());
+                }
                 if (isCurrentVideo) {
                     if (!videoTimelineView.isDragging()) {
                         float progress = getCurrentVideoPosition() / (float) getVideoDuration();
@@ -10760,7 +10763,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 final int duration = (int) currentMessageObject.getDuration();
                 final String name = currentMessageObject.getFileNameFast();
                 if (!TextUtils.isEmpty(name)) {
-                    if (duration >= 10) {
+                    if (duration > 0) {
                         SavedVideoPosition videoPosition = savedVideoPositions.get(name);
                         if (currentMessageObject.forceSeekTo < 0 && videoPosition != null) {
                             float pos = videoPosition.position;
@@ -10772,7 +10775,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                         shouldSavePositionForCurrentVideoShortTerm = name;
                     }
                     if (duration >= 5 * 60) {
-                        if (currentMessageObject.forceSeekTo < 0) {
+                        if (currentMessageObject.forceSeekTo < 0 && !savedVideoPositions.containsKey(name)) {
                             SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("media_saved_pos", Activity.MODE_PRIVATE);
                             float pos = preferences.getFloat(name, -1);
                             if (pos > 0 && pos < 0.999f) {
@@ -11019,7 +11022,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             cancelVideoPlayRunnable();
             AndroidUtilities.cancelRunOnUIThread(setLoadingRunnable);
             AndroidUtilities.cancelRunOnUIThread(hideActionBarRunnable);
-            if (shouldSavePositionForCurrentVideoShortTerm != null) {
+            if (shouldSavePositionForCurrentVideoShortTerm != null && videoPlayer.getDuration() > 0) {
                 final float progress = videoPlayer.getCurrentPosition() / (float) videoPlayer.getDuration();
                 savedVideoPositions.put(shouldSavePositionForCurrentVideoShortTerm, new SavedVideoPosition(progress, SystemClock.elapsedRealtime()));
                 if (currentMessageObject != null) {
@@ -11033,7 +11036,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         }
         if (photoViewerWebView != null) {
             AndroidUtilities.cancelRunOnUIThread(hideActionBarRunnable);
-            if (shouldSavePositionForCurrentVideoShortTerm != null) {
+            if (shouldSavePositionForCurrentVideoShortTerm != null && getVideoDuration() > 0) {
                 float progress = getCurrentVideoPosition() / (float) getVideoDuration();
                 savedVideoPositions.put(shouldSavePositionForCurrentVideoShortTerm, new SavedVideoPosition(progress, SystemClock.elapsedRealtime()));
                 if (currentMessageObject != null) {
@@ -23369,11 +23372,32 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         }
     }
 
+    public static void saveProgress(MessageObject msg, float progress) {
+        if (msg == null || !msg.isVideo() || msg.isLivePhoto() || msg.getDuration() <= 0 || !Float.isFinite(progress)) {
+            return;
+        }
+        final String name = msg.getFileNameFast();
+        if (TextUtils.isEmpty(name)) {
+            return;
+        }
+        progress = Utilities.clamp01(progress);
+        SavedVideoPosition videoPosition = savedVideoPositions.get(name);
+        if (videoPosition == null) {
+            savedVideoPositions.put(name, new SavedVideoPosition(progress, SystemClock.elapsedRealtime()));
+        } else {
+            videoPosition.position = progress;
+            videoPosition.timestamp = SystemClock.elapsedRealtime();
+        }
+        if (msg.cachedSavedTimestamp == null) {
+            msg.cachedSavedTimestamp = progress;
+        }
+    }
+
     public static float getSavedProgressFast(MessageObject msg) {
         final int duration = (int) msg.getDuration();
         final String name = msg.isEmbedVideo() ? msg.messageOwner.media.webpage.url : msg.getFileNameFast();
         if (!TextUtils.isEmpty(name)) {
-            if (duration >= 10) {
+            if (duration > 0) {
                 final SavedVideoPosition videoPosition = savedVideoPositions.get(name);
                 if (msg != null && msg.forceSeekTo < 0 && videoPosition != null) {
                     float pos = videoPosition.position;
@@ -23390,13 +23414,14 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         final int duration = (int) msg.getDuration();
         final String name = msg.isEmbedVideo() ? msg.messageOwner.media.webpage.url : msg.getFileNameFast();
         if (!TextUtils.isEmpty(name)) {
-            if (duration >= 10) {
+            if (duration > 0) {
                 SavedVideoPosition videoPosition = savedVideoPositions.get(name);
                 if (msg != null && msg.forceSeekTo < 0 && videoPosition != null) {
                     float pos = videoPosition.position;
                     if (pos > 0 && pos < 0.999f) {
                         return pos;
                     }
+                    return 0;
                 }
             }
             if (duration >= 2 * 60) {

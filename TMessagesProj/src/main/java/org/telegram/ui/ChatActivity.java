@@ -42891,7 +42891,10 @@ public class ChatActivity extends BaseFragment implements
                         logSponsoredClicked(message, true, false);
                     }
                 }
-                if (message.getDuration() > 0 && message.getVideoStartsTimestamp() > 0 && !message.openedInViewer) {
+                AnimatedFileDrawable animation = cell == null ? null : cell.getPhotoImage().getAnimation();
+                if (message.isVideo() && !message.isLivePhoto() && !MediaController.getInstance().isPlayingMessage(message) && animation != null && animation.hasBitmap() && animation.getDurationMs() > 0) {
+                    message.forceSeekTo = Utilities.clamp01(animation.getCurrentPlaybackProgressMs() / (float) animation.getDurationMs());
+                } else if (message.getDuration() > 0 && message.getVideoStartsTimestamp() > 0 && !message.openedInViewer) {
                     final int timestamp = message.getVideoStartsTimestamp();
                     message.forceSeekTo = (float) (timestamp / message.getDuration());
                 }

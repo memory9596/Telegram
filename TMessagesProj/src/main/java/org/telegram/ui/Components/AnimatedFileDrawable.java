@@ -26,6 +26,7 @@ import android.graphics.Shader;
 import android.graphics.Xfermode;
 import android.graphics.drawable.Animatable;
 import android.graphics.drawable.BitmapDrawable;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
 
@@ -66,6 +67,9 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
     private boolean PRERENDER_FRAME;
 
     private long lastFrameTime;
+    private long playbackFrameTime;
+    private long playbackFrameElapsed;
+    private boolean playbackProgressRunning;
     private int lastTimeStamp;
     private int invalidateAfter = 50;
     private final int[] metaData = new int[8];
@@ -827,6 +831,41 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
         return 0;
     }
 
+    @UiThread
+    public int getCurrentPlaybackProgressMs() {
+        if (SizeNotifierFrameLayout.drawingBlur || AndroidUtilities.makingGlobalBlurBitmap) {
+            return pendingSeekToUI >= 0 ? (int) pendingSeekToUI
+                    : renderingBuffer == null ? getCurrentProgressMs() : (int) (renderingBuffer.time + playbackFrameElapsed);
+        }
+        final long now = SystemClock.uptimeMillis();
+        if (playbackProgressRunning) {
+            playbackFrameElapsed += Math.max(0, now - playbackFrameTime);
+        }
+        playbackFrameTime = now;
+        playbackProgressRunning = false;
+        if (pendingSeekToUI >= 0 || renderingBuffer == null) {
+            playbackFrameElapsed = 0;
+            return getCurrentProgressMs();
+        }
+        final int position = renderingBuffer.time;
+        final int duration = endTime > 0 ? Math.min(metaData[4], (int) (endTime * 1000)) : metaData[4];
+        final int limit;
+        if (nextRenderingBuffer != null) {
+            // A lower timestamp belongs to the next loop; the last frame lasts until the end.
+            limit = nextRenderingBuffer.time < position ? duration : Math.min(duration, nextRenderingBuffer.time);
+        } else {
+            limit = Math.min(duration, position + (int) Math.ceil(1000.0 / Math.max(1, metaData[5])));
+        }
+        playbackFrameElapsed = Math.min(playbackFrameElapsed, Math.max(0, limit - position));
+        playbackProgressRunning = isRunning && hasVisibleParents && !isPaused && !skipFrameUpdate
+                && !isStaticVideoDetected && metaData[5] > 0 && position + playbackFrameElapsed < limit;
+        return (int) (position + playbackFrameElapsed);
+    }
+
+    public boolean isPlaybackProgressRunning() {
+        return playbackProgressRunning;
+    }
+
     public int getProgressMs() {
         return metaData[3];
     }
@@ -1356,6 +1395,10 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
         nextRenderingBuffer = nextRenderingBuffer2;
         nextRenderingBuffer2 = null;
         lastFrameTime = now;
+        playbackFrameElapsed = 0;
+        playbackFrameTime = SystemClock.uptimeMillis();
+        playbackProgressRunning = false;
+        getCurrentPlaybackProgressMs();
         swapBuffersAllowedByChoreographer = false;
     }
 
@@ -1420,6 +1463,7 @@ public final class AnimatedFileDrawable extends BitmapDrawable implements Animat
 
     @UiThread
     private void checkChoreographerInternal() {
+        getCurrentPlaybackProgressMs();
         if (isRunning && hasVisibleParents && !isPaused && !isStaticVideoDetected) {
             if (!isChoreographerRegistered) {
                 final int fps = metaData[5];
