@@ -15430,6 +15430,18 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     @Override
     public void didSetImage(ImageReceiver imageReceiver, boolean set, boolean thumb, boolean memCache) {
         if (currentMessageObject != null && set) {
+            if (imageReceiver == photoImage && !thumb && currentMessageObject.isVideo() && !currentMessageObject.isLivePhoto()) {
+                AnimatedFileDrawable animation = photoImage.getAnimation();
+                if (animation != null && !animation.hasBitmap() && animation.getCurrentProgressMs() == 0) {
+                    float progress = currentMessageObject.forceSeekTo >= 0 ? currentMessageObject.forceSeekTo : currentMessageObject.getVideoSavedProgress();
+                    if (currentMessageObject.forceSeekTo < 0 && progress == 0 && !currentMessageObject.openedInViewer && currentMessageObject.getDuration() > 0 && currentMessageObject.getVideoStartsTimestamp() > 0) {
+                        progress = (float) (currentMessageObject.getVideoStartsTimestamp() / currentMessageObject.getDuration());
+                    }
+                    if (progress > 0 && progress < 0.999f) {
+                        animation.seekTo((long) (progress * currentMessageObject.getDuration() * 1000), false);
+                    }
+                }
+            }
             if (setCurrentDiceValue(!memCache && !currentMessageObject.wasUnread)) {
                 return;
             }
@@ -24240,7 +24252,16 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     public void drawVideoTimestamps(Canvas canvas, int color) {
         if (currentMessageObject == null || currentMessageObject.isLivePhoto() || controlsAlpha <= 0 || !photoImage.getVisible()) return;
         float progress;
-        if (!currentMessageObject.openedInViewer && currentMessageObject.getVideoStartsTimestamp() != -1) {
+        final AnimatedFileDrawable animation = photoImage.getAnimation();
+        if (currentMessageObject.isVideo() && animation != null && animation.hasBitmap() && animation.getDurationMs() > 0) {
+            progress = animation.getCurrentPlaybackProgressMs() / (float) animation.getDurationMs();
+            if (animation.isPlaybackProgressRunning() && !SizeNotifierFrameLayout.drawingBlur && !AndroidUtilities.makingGlobalBlurBitmap) {
+                Choreographer60FpsContent.getInstance().postInvalidateView(this);
+            }
+            if (!SizeNotifierFrameLayout.drawingBlur && !AndroidUtilities.makingGlobalBlurBitmap && !PhotoViewer.isPlayingMessage(currentMessageObject) && !PhotoViewer.isPlayingMessageInPip(currentMessageObject)) {
+                PhotoViewer.saveProgress(currentMessageObject, progress);
+            }
+        } else if (!currentMessageObject.openedInViewer && currentMessageObject.getVideoStartsTimestamp() != -1) {
             progress = currentMessageObject.getVideoStartsTimestamp() / (float) currentMessageObject.getDuration();
         } else {
             progress = currentMessageObject.getVideoSavedProgress();
