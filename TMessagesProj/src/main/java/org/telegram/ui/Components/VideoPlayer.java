@@ -45,6 +45,8 @@ import androidx.media3.datasource.TransferListener;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.ExoPlaybackException;
+import androidx.media3.exoplayer.Renderer;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
@@ -61,6 +63,8 @@ import androidx.media3.exoplayer.dash.DashMediaSource;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException;
 import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer;
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter;
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
 import androidx.media3.exoplayer.mediacodec.MediaCodecUtil;
 import androidx.media3.exoplayer.source.LoopingMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
@@ -77,6 +81,8 @@ import androidx.media3.exoplayer.upstream.DefaultAllocator;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 import androidx.media3.common.VideoSize;
 import androidx.media3.exoplayer.video.SurfaceNotValidException;
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
@@ -283,6 +289,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
     private String videoType, audioType;
     private boolean loopingMediaSource;
     private boolean looping;
+    private boolean sparseVideoPlayback;
     private int repeatCount;
 
     private boolean shouldPauseOther;
@@ -329,6 +336,76 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         this.looper = looper;
     }
 
+    public void setSparseVideoPlayback(boolean sparseVideoPlayback) {
+        this.sparseVideoPlayback = sparseVideoPlayback;
+    }
+
+    public boolean isSparseVideoPlayback() {
+        return sparseVideoPlayback;
+    }
+
+    private static class SparseVideoRenderersFactory extends DefaultRenderersFactory {
+        SparseVideoRenderersFactory(Context context) {
+            super(context);
+        }
+
+        @Override
+        protected void buildVideoRenderers(Context context, int extensionRendererMode,
+                MediaCodecSelector selector, boolean enableDecoderFallback, Handler handler,
+                VideoRendererEventListener listener, long joiningTimeMs, ArrayList<Renderer> out) {
+            out.add(new SparseVideoRenderer(new MediaCodecVideoRenderer.Builder(context)
+                    .setCodecAdapterFactory(getCodecAdapterFactory())
+                    .setMediaCodecSelector(selector)
+                    .setAllowedJoiningTimeMs(joiningTimeMs)
+                    .setEnableDecoderFallback(enableDecoderFallback)
+                    .setEventHandler(handler)
+                    .setEventListener(listener)
+                    .setMaxDroppedFramesToNotify(50)));
+        }
+    }
+
+    private static class SparseVideoRenderer extends MediaCodecVideoRenderer {
+        private Surface outputSurface;
+
+        SparseVideoRenderer(Builder builder) {
+            super(builder);
+        }
+
+        @Override
+        protected boolean shouldInitCodec(androidx.media3.exoplayer.mediacodec.MediaCodecInfo codecInfo) {
+            // All samples can reach EOS before a thumbnail-opening animation creates the texture.
+            // Bind the decoder to the real output from the outset instead of a placeholder surface.
+            return outputSurface != null && outputSurface.isValid() && super.shouldInitCodec(codecInfo);
+        }
+
+        @Override
+        public void handleMessage(int type, Object message) throws ExoPlaybackException {
+            if (type == MSG_SET_VIDEO_OUTPUT) {
+                outputSurface = message instanceof Surface ? (Surface) message : null;
+            }
+            super.handleMessage(type, message);
+        }
+
+        @Override
+        public boolean isReady() {
+            // Allow PhotoViewer to reveal its output view while retaining the first decoded frame.
+            return outputSurface == null || !outputSurface.isValid()
+                    ? isReadyForDecoding() : super.isReady();
+        }
+
+        @Override
+        protected boolean processOutputBuffer(long positionUs, long elapsedRealtimeUs,
+                MediaCodecAdapter codec, ByteBuffer buffer, int bufferIndex, int bufferFlags,
+                int sampleCount, long timeUs, boolean decodeOnly, boolean last, Format format)
+                throws ExoPlaybackException {
+            if (!(decodeOnly && !last) && (outputSurface == null || !outputSurface.isValid())) {
+                return false;
+            }
+            return super.processOutputBuffer(positionUs, elapsedRealtimeUs, codec,
+                    buffer, bufferIndex, bufferFlags, sampleCount, timeUs, decodeOnly, last, format);
+        }
+    }
+
     private void ensurePlayerCreated() {
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
             .setAllocator(new DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
@@ -350,6 +427,8 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             DefaultRenderersFactory factory;
             if (audioVisualizerDelegate != null) {
                 factory = new AudioVisualizerRenderersFactory(ApplicationLoader.applicationContext);
+            } else if (sparseVideoPlayback) {
+                factory = new SparseVideoRenderersFactory(ApplicationLoader.applicationContext);
             } else {
                 factory = new DefaultRenderersFactory(ApplicationLoader.applicationContext);
             }
@@ -378,7 +457,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 player.setVideoSurfaceView(surfaceView);
             }
             player.setPlayWhenReady(autoplay);
-            player.setRepeatMode(looping ? ExoPlayer.REPEAT_MODE_ALL : ExoPlayer.REPEAT_MODE_OFF);
+            player.setRepeatMode(looping && !sparseVideoPlayback ? ExoPlayer.REPEAT_MODE_ALL : ExoPlayer.REPEAT_MODE_OFF);
         }
         if (mixedAudio) {
             if (audioPlayer == null) {
@@ -1869,7 +1948,7 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
         if (this.looping != looping) {
             this.looping = looping;
             if (player != null) {
-                player.setRepeatMode(looping ? ExoPlayer.REPEAT_MODE_ALL : ExoPlayer.REPEAT_MODE_OFF);
+                player.setRepeatMode(looping && !sparseVideoPlayback ? ExoPlayer.REPEAT_MODE_ALL : ExoPlayer.REPEAT_MODE_OFF);
             }
         }
     }
@@ -1886,6 +1965,14 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
 
     @Override
     public void onPlayerStateChanged(boolean playWhenReady, int playbackState) {
+        if (sparseVideoPlayback && looping && playWhenReady && playbackState == Player.STATE_ENDED
+                && player != null) {
+            // Keep the source final so MediaCodec receives EOS promptly; repeat at the player level.
+            repeatCount++;
+            player.seekTo(0);
+            player.setPlayWhenReady(true);
+            return;
+        }
         maybeReportPlayerState();
         if (playWhenReady && playbackState == Player.STATE_READY && !isMuted() && shouldPauseOther) {
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.playerDidStartPlaying, this);
