@@ -10749,7 +10749,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 final int duration = (int) currentMessageObject.getDuration();
                 final String name = currentMessageObject.getFileNameFast();
                 if (!TextUtils.isEmpty(name)) {
-                    if (duration >= 10) {
+                    if (duration > 0) {
                         SavedVideoPosition videoPosition = savedVideoPositions.get(name);
                         if (currentMessageObject.forceSeekTo < 0 && videoPosition != null) {
                             float pos = videoPosition.position;
@@ -23350,7 +23350,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         final int duration = (int) msg.getDuration();
         final String name = msg.isEmbedVideo() ? msg.messageOwner.media.webpage.url : msg.getFileNameFast();
         if (!TextUtils.isEmpty(name)) {
-            if (duration >= 10) {
+            if (duration > 0) {
                 final SavedVideoPosition videoPosition = savedVideoPositions.get(name);
                 if (msg != null && msg.forceSeekTo < 0 && videoPosition != null) {
                     float pos = videoPosition.position;
@@ -23367,7 +23367,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         final int duration = (int) msg.getDuration();
         final String name = msg.isEmbedVideo() ? msg.messageOwner.media.webpage.url : msg.getFileNameFast();
         if (!TextUtils.isEmpty(name)) {
-            if (duration >= 10) {
+            if (duration > 0) {
                 SavedVideoPosition videoPosition = savedVideoPositions.get(name);
                 if (msg != null && msg.forceSeekTo < 0 && videoPosition != null) {
                     float pos = videoPosition.position;
