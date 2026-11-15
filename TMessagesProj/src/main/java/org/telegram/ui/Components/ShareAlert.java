@@ -9,6 +9,7 @@
 package org.telegram.ui.Components;
 
 import static org.telegram.messenger.AndroidUtilities.dp;
+import static org.telegram.messenger.AndroidUtilities.dpf2;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
@@ -18,6 +19,7 @@ import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -25,11 +27,14 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
@@ -42,8 +47,10 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.animation.DecelerateInterpolator;
@@ -121,6 +128,7 @@ import org.telegram.ui.Components.blur3.capture.IBlur3Capture;
 import org.telegram.ui.Components.blur3.drawable.BlurredBackgroundDrawable;
 import org.telegram.ui.Components.blur3.drawable.color.impl.BlurredBackgroundProviderImpl;
 import org.telegram.utils.glass.source.GlassSourceColor;
+import org.telegram.utils.glass.source.GlassSourceBitmap;
 import org.telegram.utils.glass.source.GlassSourceRenderNode;
 import org.telegram.ui.Components.blur3.utils.Blur3Utils;
 import org.telegram.ui.DialogsActivity;
@@ -130,6 +138,9 @@ import org.telegram.ui.PhotoViewer;
 import org.telegram.ui.PremiumPreviewFragment;
 import org.telegram.ui.Stories.DarkThemeResourceProvider;
 import org.telegram.utils.glass.GlassEngine;
+import org.telegram.utils.glass.GlassCaptureSourceCanvas;
+import org.telegram.ui.Components.blur3.drawable.color.BlurredBackgroundProviderBuilder;
+import org.telegram.ui.Components.blur3.drawable.color.BlurredBackgroundProvider;
 import org.telegram.utils.glass.positions.GlassPositionsArray;
 import org.telegram.utils.glass.positions.GlassPositionsMerger;
 
@@ -143,7 +154,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
-import me.vkryl.core.BitwiseUtils;
 
 public class ShareAlert extends BottomSheet implements NotificationCenter.NotificationCenterDelegate {
 
@@ -161,6 +171,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
     private FrameLayout hideCaptionButtonContainer;
     private FrameLayout pickerBottom;
     private float sheetBackgroundTop; // inner top of the sheet background, in containerView coordinates
+    private float sheetPinnedToTopProgress;
     private View bottomFadeView;
     private FrameLayout pickerBottomLayout;
     private LinearLayout linkContainer;
@@ -187,10 +198,44 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
     private int hasPoll;
     private StickerEmptyView searchEmptyView;
     private Drawable shadowDrawable;
+    private BlurredBackgroundDrawable sheetGlassBackground;
+    private View sheetBackdropView;
+    private GlassSourceRenderNode sheetBackdropSource;
+    private GlassSourceRenderNode sheetBackdropFrostedSource;
+    private GlassSourceColor sheetBackdropColor;
+    private GlassSourceBitmap sheetBackdropBitmap;
+    private boolean initialBackdropPending;
+    private boolean backdropMaterialInvalidated = true;
+    private int backdropMaterialWidth, backdropMaterialHeight, backdropThemeGeneration;
+    private GlassCaptureSourceCanvas sheetBackdropCapture;
+    private int sheetBackdropWidth, sheetBackdropHeight;
+    private float sheetGlassRadius = -1;
+    private final int[] backdropPosition = new int[2], sheetPosition = new int[2];
+    private int sheetSourceOffsetX = Integer.MIN_VALUE, sheetSourceOffsetY = Integer.MIN_VALUE;
+    private ViewTreeObserver sheetGlassObserver;
+    private final ViewTreeObserver.OnPreDrawListener sheetGlassPositionListener = () -> {
+        updateSheetGeometry();
+        updateSheetGlassPosition();
+        return true;
+    };
+    private boolean sheetBackdropInvalidated = true;
+    private boolean headerGlassNeedsCapture = true;
     private static final int BOTTOM_SPACER_VIEW_TYPE = 2;
     private int gridBottomSpacerHeight;
     private int topicsBottomSpacerHeight;
     private int pendingFolderGridTop = Integer.MIN_VALUE;
+    private boolean capturingSheetBackdrop;
+    private boolean capturingDialogList;
+    private View headerFadeView;
+    private BlurredBackgroundWithFadeDrawable headerFadeDrawable;
+    private BlurredBackgroundWithFadeDrawable headerPinnedFadeDrawable;
+    private BlurredBackgroundDrawable headerSurfaceGlass;
+    private float headerSurfaceGlassRadius = -1;
+    private static final int SHARE_FADE_HEIGHT_DP = 72;
+    private static final int SHARE_GLASS_RADIUS_DP = 22;
+    private final GlassPositionsArray headerCapturePositions = new GlassPositionsArray(4);
+    private final GlassPositionsArray mergedHeaderCapturePositions = new GlassPositionsArray(4);
+    private final GlassPositionsMerger headerCaptureMerger = new GlassPositionsMerger(Float.POSITIVE_INFINITY, dp(48));
     private View[] shadow = new View[2];
     private AnimatorSet[] shadowAnimation = new AnimatorSet[2];
     protected LongSparseArray<TLRPC.Dialog> selectedDialogs = new LongSparseArray<>();
@@ -503,9 +548,9 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
                 return !searchIsVisible && selectedTopicDialog == null;
             }
         });
-        BlurredBackgroundDrawable background = iBlur3FactoryLiquidGlass.create(tabsView, BlurredBackgroundProviderImpl.topPanel(resourcesProvider));
-        background.setRadius(dp(18));
-        background.setPadding(dp(6.666f));
+        BlurredBackgroundDrawable background = createShareGlass(tabsView);
+        // Like COPY LINK, the glass body is 40dp high; text keeps its existing padding.
+        background.setPadding(dp(5));
         tabsView.setPadding(0, dp(7), 0, dp(7));
         tabsView.setBlurredBackground(background);
         return tabsView;
@@ -516,9 +561,16 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         final View spacer = layoutManager.findViewByPosition(0);
         // A recycled spacer means the list is already expanded; keep the new folder at that height.
         pendingFolderGridTop = spacer != null ? Math.max(0, spacer.getTop()) : 0;
+        headerGlassNeedsCapture = true;
         glassEngine.invalidate();
         layoutManager.scrollToPositionWithOffset(0, pendingFolderGridTop - gridView.getPaddingTop());
         containerView.requestLayout();
+    }
+
+    private void updateSearchFieldBackground() {
+        if (searchView != null) {
+            searchView.setBlurredBackgroundVisibility(LiteMode.isEnabled(LiteMode.FLAG_LIQUID_GLASS) ? 1f : 0f);
+        }
     }
 
     @SuppressWarnings("FieldCanBeLocal")
@@ -695,14 +747,12 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             iBlur3FactoryFrostedLiquidGlass.setGlassEngine(glassEngine);
 
             iBlur3FactoryFade = new BlurredBackgroundDrawableViewFactory(iBlur3SourceColor);
-            iBlur3FactoryFade.setGlassEngine(glassEngine);
         } else {
             scrollableViewNoiseSuppressor = null;
             iBlur3SourceGlassFrosted = null;
             iBlur3SourceGlass = null;
 
             final BlurredBackgroundDrawableViewFactory factory = new BlurredBackgroundDrawableViewFactory(iBlur3SourceColor);
-            factory.setGlassEngine(glassEngine);
             iBlur3FactoryFade = iBlur3FactoryLiquidGlass = iBlur3FactoryFrostedLiquidGlass  = factory;
         }
 
@@ -759,6 +809,9 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             @Override
             public void onOpenAnimationEnd() {
                 fullyShown = true;
+                updateSheetGlassPosition();
+                glassEngine.invalidate();
+                containerView.postInvalidateOnAnimation();
             }
         });
 
@@ -797,12 +850,18 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         sizeNotifierFrameLayout = new SizeNotifierFrameLayout(context) {
 
             @Override
+            public void draw(Canvas canvas) {
+                if (!capturingSheetBackdrop) super.draw(canvas);
+            }
+
+            @Override
             public int measureKeyboardHeight() {
                 return attachedFragment != null ? attachedKeyboardHeight : super.measureKeyboardHeight();
             }
 
             private boolean ignoreLayout = false;
             private RectF rect1 = new RectF();
+            private final Paint dragHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             private boolean fullHeight;
             private int topOffset;
             private int previousTopOffset;
@@ -942,12 +1001,22 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             @Override
             protected void onAttachedToWindow() {
                 super.onAttachedToWindow();
+                if (sheetGlassBackground != null) {
+                    sheetGlassObserver = getViewTreeObserver();
+                    sheetGlassObserver.addOnPreDrawListener(sheetGlassPositionListener);
+                }
+                glassEngine.invalidate();
+                postInvalidateOnAnimation();
                 adjustPanLayoutHelper.setResizableView(this);
                 adjustPanLayoutHelper.onAttach();
             }
 
             @Override
             protected void onDetachedFromWindow() {
+                if (sheetGlassObserver != null) {
+                    if (sheetGlassObserver.isAlive()) sheetGlassObserver.removeOnPreDrawListener(sheetGlassPositionListener);
+                    sheetGlassObserver = null;
+                }
                 super.onDetachedFromWindow();
                 adjustPanLayoutHelper.onDetach();
             }
@@ -1161,6 +1230,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
                 notifyHeightChanged();
                 updateBottomOverlay();
                 updateLayout();
+                primeSheetGlass();
             }
 
             @Override
@@ -1193,31 +1263,25 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             }
 
             private boolean lightStatusBar = AndroidUtilities.computePerceivedBrightness(getThemedColor(Theme.key_dialogBackground)) > .721f;
-            private final AnimatedFloat pinnedToTop = new AnimatedFloat(this, 0, 350, CubicBezierInterpolator.EASE_OUT_QUINT);
 
             @Override
             protected void onDraw(Canvas canvas) {
+                updateSheetGeometry();
                 canvas.save();
                 canvas.translate(0, currentPanTranslationY);
-                int y = scrollOffsetY - backgroundPaddingTop + dp(6) + topOffset;
-                int top = containerViewTop = scrollOffsetY - backgroundPaddingTop - dp(13) + topOffset;
+                int top = containerViewTop = Math.round(sheetBackgroundTop - currentPanTranslationY) - backgroundPaddingTop;
                 int height = getMeasuredHeight() + dp(30 + 30) + backgroundPaddingTop;
-                int statusBarHeight = 0;
-                float radProgress = 1.0f;
-                float pinAlpha = 0;
-                if (!isFullscreen) {
-                    y += systemInsets.top;
-                    final boolean pinnedToTop = fullHeight && top + backgroundPaddingTop < systemInsets.top;
-                    top = AndroidUtilities.lerp(top + systemInsets.top, -backgroundPaddingTop, pinAlpha = this.pinnedToTop.set(pinnedToTop));
+                float pinAlpha = sheetPinnedToTopProgress;
+                if (sheetGlassBackground != null) {
+                    canvas.save();
+                    canvas.translate(0, -currentPanTranslationY);
+                    sheetGlassBackground.draw(canvas);
+                    canvas.restore();
+                } else {
+                    shadowDrawable.setBounds(0, top, getMeasuredWidth(), height);
+                    shadowDrawable.draw(canvas);
                 }
-
-                shadowDrawable.setBounds(0, top, getMeasuredWidth(), height);
-                shadowDrawable.draw(canvas);
-                final float newSheetBackgroundTop = top + backgroundPaddingTop + currentPanTranslationY;
-                if (sheetBackgroundTop != newSheetBackgroundTop) {
-                    sheetBackgroundTop = newSheetBackgroundTop;
-                    frameLayout.invalidate();
-                }
+                primeHeaderGlass();
 
                 if (bulletinContainer2 != null) {
                     if (top <= systemInsets.top && bulletinContainer2.getChildCount() > 0) {
@@ -1234,18 +1298,10 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
                     }
                 }
 
-                if (pinAlpha < 1) {
-                    int w = dp(36);
-                    rect1.set((getMeasuredWidth() - w) / 2, y, (getMeasuredWidth() + w) / 2, y + dp(4));
-                    Theme.dialogs_onlineCirclePaint.setColor(getThemedColor(Theme.key_sheet_scrollUp));
-                    Theme.dialogs_onlineCirclePaint.setAlpha((int) (Theme.dialogs_onlineCirclePaint.getAlpha() * (1f - pinAlpha)));
-                    canvas.drawRoundRect(rect1, dp(2), dp(2), Theme.dialogs_onlineCirclePaint);
-                }
-
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     int flags = getSystemUiVisibility();
-                    lightStatusBar = AndroidUtilities.computePerceivedBrightness(getThemedColor(Theme.key_dialogBackground)) > .721f;
-                    boolean shouldBeLightStatusBar = lightStatusBar && statusBarHeight > systemInsets.top * .5f;
+                    lightStatusBar = AndroidUtilities.computePerceivedBrightness(getThemedColor(Theme.key_chat_messagePanelBackground)) > .721f;
+                    boolean shouldBeLightStatusBar = pinAlpha > .5f && lightStatusBar;
                     boolean isLightStatusBar = (flags & View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR) > 0;
                     if (shouldBeLightStatusBar != isLightStatusBar) {
                         if (shouldBeLightStatusBar) {
@@ -1264,9 +1320,21 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             @Override
             protected void dispatchDraw(Canvas canvas) {
                 canvas.save();
-                canvas.clipRect(0, getPaddingTop() + currentPanTranslationY, getMeasuredWidth(), getMeasuredHeight() + currentPanTranslationY + dp(50));
+                canvas.clipRect(0, getPaddingTop() * (1f - sheetPinnedToTopProgress) + currentPanTranslationY,
+                        getMeasuredWidth(), getMeasuredHeight() + currentPanTranslationY + dp(50));
                 super.dispatchDraw(canvas);
                 canvas.restore();
+                if (sheetPinnedToTopProgress < 1) {
+                    // Draw above the header material so it cannot cover the grab handle.
+                    final int color = getThemedColor(Theme.key_sheet_scrollUp);
+                    dragHandlePaint.setColor(color);
+                    dragHandlePaint.setAlpha(Math.round(Color.alpha(color) * (1f - sheetPinnedToTopProgress)));
+                    final int width = dp(36);
+                    final float y = scrollOffsetY - backgroundPaddingTop + dp(6) + topOffset
+                            + (isFullscreen ? 0 : systemInsets.top) + currentPanTranslationY;
+                    rect1.set((getMeasuredWidth() - width) / 2f, y, (getMeasuredWidth() + width) / 2f, y + dp(4));
+                    canvas.drawRoundRect(rect1, dp(2), dp(2), dragHandlePaint);
+                }
             }
 
             @Override
@@ -1289,35 +1357,13 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
 
         containerView.setWillNotDraw(false);
         containerView.setClipChildren(false);
+        // dispatchDraw already applies the animated inset boundary; default padding clipping would
+        // keep the header material below the status bar after the sheet reaches the top.
+        containerView.setClipToPadding(false);
         containerView.setPadding(backgroundPaddingLeft, 0, backgroundPaddingLeft, systemInsets.bottom);
+        setupSheetGlass();
 
         frameLayout = new FrameLayout(context);
-        frameLayout.setBackground(new Drawable() {
-            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            private final Path path = new Path();
-            @Override
-            public void draw(@NonNull Canvas canvas) {
-                // the sheet's rounded top starts above the header: cut the header's corners along the same curve
-                final android.graphics.Rect b = getBounds();
-                final float r = dp(25);
-                final float sheetTop = Math.min(b.top, sheetBackgroundTop - frameLayout.getY());
-                paint.setColor(getThemedColor(Theme.key_dialogBackground));
-                path.rewind();
-                path.addRoundRect(b.left, sheetTop, b.right, b.bottom + r, r, r, Path.Direction.CW);
-                canvas.save();
-                canvas.clipRect(b);
-                canvas.drawPath(path, paint);
-                canvas.restore();
-            }
-            @Override
-            public void setAlpha(int alpha) {}
-            @Override
-            public void setColorFilter(@Nullable android.graphics.ColorFilter colorFilter) {}
-            @Override
-            public int getOpacity() {
-                return android.graphics.PixelFormat.TRANSLUCENT;
-            }
-        });
 
         if (darkTheme && linkToCopy[1] != null) {
             switchView = new SwitchView(context) {
@@ -1330,6 +1376,11 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         }
 
         searchView = new FragmentSearchField(context, resourcesProvider);
+        BlurredBackgroundDrawable searchGlass = createShareGlass(searchView);
+        searchView.setupBlurredBackground(searchGlass);
+        // FragmentSearchField expands its bounds by 4dp; this leaves the same 40dp glass body as COPY LINK.
+        searchGlass.setPadding(dp(4));
+        updateSearchFieldBackground();
         searchView.editText.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
@@ -1408,8 +1459,16 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         topicsBackActionBar.setVisibility(View.GONE);
         frameLayout.addView(topicsBackActionBar, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 58, Gravity.BOTTOM | Gravity.LEFT, 0, 0, 0, getFilterTabsHeight()));
 
-        topicsGridView = new RecyclerListView(context, resourcesProvider);
-        topicsGridView.setLayoutManager(topicsLayoutManager = new GridLayoutManager(context, 4));
+        topicsGridView = new RecyclerListView(context, resourcesProvider) {
+            @Override
+            public void draw(Canvas canvas) {
+                canvas.save();
+                clipDialogListForDraw(canvas, this);
+                super.draw(canvas);
+                canvas.restore();
+            }
+        };
+        topicsGridView.setLayoutManager(topicsLayoutManager = createDialogLayoutManager(context));
         topicsLayoutManager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
             @Override
             public int getSpanSize(int position) {
@@ -1429,6 +1488,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             }
         });
         topicsGridView.setAdapter(shareTopicsAdapter = new ShareTopicsAdapter(context));
+        glassEngine.addScrolledView(topicsGridView);
         ThemeBind.listGlowColor(topicsGridView, Theme.key_dialogScrollGlow, resourcesProvider);
         topicsGridView.setVerticalScrollBarEnabled(false);
         topicsGridView.setHorizontalScrollBarEnabled(false);
@@ -1437,6 +1497,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         topicsGridView.setItemSelectorColorProvider(i -> 0);
         topicsGridView.setPadding(0, 0, 0, dp(48));
         topicsGridView.setClipToPadding(false);
+        topicsGridView.setClipChildren(false);
         topicsGridView.addItemDecoration(new RecyclerView.ItemDecoration() {
             @Override
             public void getItemOffsets(@NonNull android.graphics.Rect outRect, @NonNull View view, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
@@ -1473,28 +1534,30 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
 
             @Override
             public void draw(Canvas canvas) {
-                if (topicsGridView.getVisibility() != View.GONE) {
-                    canvas.save();
-                    canvas.clipRect(0, scrollOffsetY + dp(getTopPanelHeight()), getWidth(), getHeight());
-                }
+                canvas.save();
+                clipDialogListForDraw(canvas, this);
                 super.draw(canvas);
-                if (topicsGridView.getVisibility() != View.GONE) {
-                    canvas.restore();
-                }
+                canvas.restore();
             }
         };
         gridView.setSelectorDrawableColor(0);
         gridView.setItemSelectorColorProvider(i -> 0);
         gridView.setPadding(0, 0, 0, dp(48));
         gridView.setClipToPadding(false);
-        gridView.setLayoutManager(layoutManager = new GridLayoutManager(getContext(), 4));
+        gridView.setClipChildren(false);
+        gridView.setLayoutManager(layoutManager = createDialogLayoutManager(getContext()));
 
         iBlur3Capture = (canvas, position) -> {
+            RecyclerListView list = topicsGridView.getVisibility() == View.VISIBLE ? topicsGridView
+                    : searchIsVisible ? searchGridView : gridView;
             final boolean wasDrawingBlur = SizeNotifierFrameLayout.drawingBlur;
             SizeNotifierFrameLayout.drawingBlur = true;
+            capturingDialogList = true;
             try {
-                Blur3Utils.captureRelativeParent(gridView, canvas, position, gridView, containerView);
+                captureHeaderBackdrop(canvas, position);
+                Blur3Utils.captureRelativeParent(list, canvas, position, list, containerView);
             } finally {
+                capturingDialogList = false;
                 SizeNotifierFrameLayout.drawingBlur = wasDrawingBlur;
             }
         };
@@ -1561,21 +1624,24 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
 
             @Override
             public void draw(Canvas canvas) {
-                if (topicsGridView.getVisibility() != View.GONE) {
-                    canvas.save();
-                    canvas.clipRect(0, scrollOffsetY + dp(getTopPanelHeight()), getWidth(), getHeight());
-                }
+                canvas.save();
+                clipDialogListForDraw(canvas, this);
                 super.draw(canvas);
-                if (topicsGridView.getVisibility() != View.GONE) {
-                    canvas.restore();
-                }
+                canvas.restore();
             }
         };
         searchGridView.setItemSelectorColorProvider(i -> 0);
         searchGridView.setSelectorDrawableColor(0);
         searchGridView.setPadding(0, 0, 0, dp(48));
         searchGridView.setClipToPadding(false);
-        searchGridView.setLayoutManager(searchLayoutManager = new FillLastGridLayoutManager(getContext(), 4, 0, searchGridView));
+        searchGridView.setClipChildren(false);
+        searchGridView.setLayoutManager(searchLayoutManager = new FillLastGridLayoutManager(getContext(), 4, 0, searchGridView) {
+            @Override
+            protected void calculateExtraLayoutSpace(@NonNull RecyclerView.State state, @NonNull int[] extraLayoutSpace) {
+                super.calculateExtraLayoutSpace(state, extraLayoutSpace);
+                extendDialogListLayoutSpace(extraLayoutSpace);
+            }
+        });
         searchLayoutManager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
             @Override
             public int getSpanSize(int position) {
@@ -1624,6 +1690,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             }
         });
         searchGridView.setAdapter(searchAdapter);
+        glassEngine.addScrolledView(searchGridView);
         ThemeBind.listGlowColor(searchGridView, Theme.key_dialogScrollGlow, resourcesProvider);
 
         recyclerItemsEnterAnimator = new RecyclerItemsEnterAnimator(searchGridView, true);
@@ -1644,11 +1711,45 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         containerView.addView(searchEmptyView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.TOP | Gravity.LEFT, 0, 52, 0, 0));
         containerView.addView(searchGridView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.TOP | Gravity.LEFT, 0, 0, 0, 0));
 
+        headerFadeView = new View(context) {
+            @Override
+            protected void onDraw(@NonNull Canvas canvas) {
+                canvas.save();
+                if (sheetGlassBackground != null) {
+                    canvas.translate(-getX(), -getY());
+                    canvas.clipPath(sheetGlassBackground.getPath());
+                    canvas.translate(getX(), getY());
+                } else {
+                    canvas.clipRect(0, Math.max(0, sheetBackgroundTop - getY()), getWidth(), getHeight());
+                }
+                headerFadeDrawable.setAlpha(Math.round(255 * (1f - sheetPinnedToTopProgress)));
+                headerFadeDrawable.draw(canvas);
+                drawPinnedHeaderFade(canvas);
+                canvas.restore();
+            }
+        };
+        final BlurredBackgroundProvider headerColors = BlurredBackgroundProviderImpl.inputFieldShareAlert(resourcesProvider);
+        headerSurfaceGlass = createShareGlass(headerFadeView);
+        // One surface runs from the sheet's top through the folders; no internal rims divide it.
+        headerSurfaceGlass.setColorProvider(new BlurredBackgroundProviderBuilder(resourcesProvider)
+                .setBackgroundColor((r, isDark) -> headerColors.getBackgroundColor()).build());
+        headerSurfaceGlass.setThickness(dp(8));
+        headerSurfaceGlass.setHasPadding(false);
+        headerFadeDrawable = new BlurredBackgroundWithFadeDrawable(headerSurfaceGlass);
+        headerFadeDrawable.setCallback(headerFadeView);
+        // Keep the header glass complete above its transition, with the bottom's 72dp falloff range.
+        headerFadeDrawable.setFadeHeight(-dp(SHARE_FADE_HEIGHT_DP), false);
+        // Outside COPY LINK the original avatars show through a color fade, without a glass redraw.
+        headerPinnedFadeDrawable = new BlurredBackgroundWithFadeDrawable(iBlur3FactoryFade.create(headerFadeView, null));
+        headerPinnedFadeDrawable.setCallback(headerFadeView);
+        headerPinnedFadeDrawable.setFadeHeight(-dp(SHARE_FADE_HEIGHT_DP), true);
+        containerView.addView(headerFadeView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.TOP | Gravity.LEFT));
+
         bottomFadeView = new View(context) {
             @Override
             public void draw(@NonNull Canvas canvas) {
                 super.draw(canvas);
-                fadeDrawable.setBounds(0, getMeasuredHeight() - systemInsets.bottom - dp(72), getMeasuredWidth(), getMeasuredHeight());
+                fadeDrawable.setBounds(0, getMeasuredHeight() - systemInsets.bottom - dp(SHARE_FADE_HEIGHT_DP), getMeasuredWidth(), getMeasuredHeight());
                 fadeDrawable.draw(canvas);
             }
         };
@@ -1659,6 +1760,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         shadow[0] = new View(context);
         ThemeBind.backgroundColor(shadow[0], Theme.key_dialogShadowLine, resourcesProvider);
         shadow[0].setAlpha(0.0f);
+        shadow[0].setVisibility(View.GONE);
         shadow[0].setTag(1);
         containerView.addView(shadow[0], frameLayoutParams);
 
@@ -2248,7 +2350,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         fadeDrawable = new BlurredBackgroundWithFadeDrawable(
                 iBlur3FactoryFade.create(bottomFadeView, null));
         if (!SharedConfig.chatBlurEnabled() || LiteMode.isEnabled(LiteMode.FLAG_LIQUID_GLASS) || true) {
-            fadeDrawable.setFadeHeight(dp(72), true);
+            fadeDrawable.setFadeHeight(dp(SHARE_FADE_HEIGHT_DP), true);
         }
 
 
@@ -2258,13 +2360,13 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         emojiViewChildBg.setThickness(dp(32));
         emojiViewChildBg.setIntensity(0.4f);
 
-        captionContainerBg = iBlur3FactoryLiquidGlass.create(frameLayout2, BlurredBackgroundProviderImpl.inputFieldShareAlert(resourcesProvider));
+        captionContainerBg = createShareGlass(frameLayout2);
         captionContainerBg.setRadius(dp(22));
         captionContainerBg.setPadding(dp(9));
         frameLayout2.setPadding(dp(9), dp(7), dp(9), dp(7));
 
         if (pickerBottomLayout != null) {
-            BlurredBackgroundDrawable d = iBlur3FactoryLiquidGlass.create(pickerBottomLayout, BlurredBackgroundProviderImpl.inputFieldShareAlert(resourcesProvider));
+            BlurredBackgroundDrawable d = createShareGlass(pickerBottomLayout);
             d.setPadding(dp(9));
             d.setRadius(dp(22));
             pickerBottomLayout.setBackground(d);
@@ -2272,7 +2374,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         }
 
         if (timestampFrameLayout != null) {
-            BlurredBackgroundDrawable d = iBlur3FactoryLiquidGlass.create(timestampFrameLayout, BlurredBackgroundProviderImpl.inputFieldShareAlert(resourcesProvider));
+            BlurredBackgroundDrawable d = createShareGlass(timestampFrameLayout);
             d.setPadding(dp(9));
             d.setRadius(dp(22));
             timestampFrameLayout.setBackground(d);
@@ -3488,6 +3590,9 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
     }
 
     private void runShadowAnimation(final int num, final boolean show) {
+        if (num == 0 && headerFadeView != null) {
+            return;
+        }
         if (show && shadow[num].getTag() != null || !show && shadow[num].getTag() == null) {
             shadow[num].setTag(show ? null : 1);
             if (show) {
@@ -4711,6 +4816,21 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         return frameLayout == null ? 0 : Math.max(0, frameLayout.getY() + frameLayout.getHeight() - list.getY());
     }
 
+    private float getDialogListDrawTop(View list) {
+        // Like the chat list, rows keep drawing beneath the fade and the independent glass capsules.
+        return sheetBackgroundTop - list.getY();
+    }
+
+    private void clipDialogListForDraw(Canvas canvas, View list) {
+        // Bottom controls overlay the rows with their fade and glass, as they did before the header changes.
+        canvas.clipRect(0, capturingDialogList ? -list.getY() : getDialogListDrawTop(list), list.getWidth(), list.getHeight());
+        if (!capturingDialogList && sheetGlassBackground != null) {
+            canvas.translate(-list.getX(), -list.getY());
+            canvas.clipPath(sheetGlassBackground.getPath());
+            canvas.translate(list.getX(), list.getY());
+        }
+    }
+
     private float getDialogListBottom(View list) {
         float bottom = list.getHeight();
         if (pickerBottom != null && pickerBottom.getVisibility() == View.VISIBLE) {
@@ -4816,6 +4936,361 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
 
     /* Blur */
 
+    private GridLayoutManager createDialogLayoutManager(Context context) {
+        return new GridLayoutManager(context, 4) {
+            @Override
+            protected void calculateExtraLayoutSpace(@NonNull RecyclerView.State state, @NonNull int[] extraLayoutSpace) {
+                super.calculateExtraLayoutSpace(state, extraLayoutSpace);
+                extendDialogListLayoutSpace(extraLayoutSpace);
+            }
+        };
+    }
+
+    private void extendDialogListLayoutSpace(int[] extraLayoutSpace) {
+        if (iBlur3SourceGlass != null && GlassEngine.getCurrentGlassSettings().isBlurEnabled) {
+            // A row above the viewport can still appear through the status-bar blur, including its outset.
+            extraLayoutSpace[0] = Math.max(extraLayoutSpace[0], systemInsets.top + dp(48));
+        }
+    }
+
+    private BlurredBackgroundDrawable createShareGlass(View view) {
+        return iBlur3FactoryLiquidGlass.create(view, BlurredBackgroundProviderImpl.inputFieldShareAlert(resourcesProvider))
+                .setRadius(dp(SHARE_GLASS_RADIUS_DP));
+    }
+
+    private float getHeaderFadeBottom() {
+        float glassBottom = frameLayout.getY() + searchView.getY() + searchView.getHeight();
+        if (isFilterTabsVisible()) {
+            glassBottom = frameLayout.getY() + filterTabsView.getY() + filterTabsView.getHeight() - dp(5);
+        }
+        if (topicsBackActionBar.getVisibility() == View.VISIBLE && topicsBackActionBar.getAlpha() > 0) {
+            glassBottom = frameLayout.getY() + topicsBackActionBar.getY() + topicsBackActionBar.getHeight();
+        }
+        float tail = Math.max(0, dp(SHARE_FADE_HEIGHT_DP - 49) - systemInsets.bottom);
+        if (pickerBottom != null && pickerBottomLayout != null && pickerBottom.getVisibility() == View.VISIBLE
+                && bottomFadeView.getHeight() > 0) {
+            final float bottomFadeTop = bottomFadeView.getY() + bottomFadeView.getHeight() - systemInsets.bottom - dp(SHARE_FADE_HEIGHT_DP);
+            final float copyGlassTop = pickerBottom.getY() + pickerBottomLayout.getY() + dp(9);
+            tail = Math.max(0, copyGlassTop - bottomFadeTop);
+        }
+        // Match the clear gap outside COPY LINK's glass body, measured from the actual bottom views.
+        final int clearGap = dp(Math.max(0, getTopSpacerHeight() - getTopPanelHeight() + 8));
+        return glassBottom + Math.min(tail, clearGap);
+    }
+
+    private void drawPinnedHeaderFade(Canvas canvas) {
+        if (sheetPinnedToTopProgress <= 0) return;
+        final float top = Math.max(0, sheetBackgroundTop - headerFadeView.getY());
+        final float searchTop = frameLayout.getY() + searchView.getY() - headerFadeView.getY();
+        final float end = getHeaderFadeBottom() - headerFadeView.getY();
+        final float fadeHeight = dp(SHARE_FADE_HEIGHT_DP);
+        float bottomGap = systemInsets.bottom + dp(9);
+        if (pickerBottom != null && pickerBottomLayout != null && pickerBottom.getVisibility() == View.VISIBLE
+                && pickerBottomLayout.getHeight() > 0 && bottomFadeView.getHeight() > 0) {
+            final float bottomFadeEnd = bottomFadeView.getY() + bottomFadeView.getHeight() - systemInsets.bottom;
+            final float copyGlassBottom = pickerBottom.getY() + pickerBottomLayout.getY()
+                    + pickerBottomLayout.getHeight() - dp(9);
+            bottomGap = bottomFadeEnd - copyGlassBottom;
+        }
+        bottomGap = Math.max(1, Math.min(fadeHeight - 1, bottomGap));
+        headerPinnedFadeDrawable.setAlpha(Math.round(255 * sheetPinnedToTopProgress));
+        headerPinnedFadeDrawable.setBounds(0, 0, headerFadeView.getWidth(), Math.round(fadeHeight));
+        // Reflect the exact bottom fade segment between COPY LINK's lower edge and the screen edge
+        // into the gap above search. Continue the same gradient to the list without a color jump.
+        if (searchTop > top) {
+            canvas.save();
+            canvas.clipRect(0, top, headerFadeView.getWidth(), searchTop);
+            canvas.translate(0, top);
+            canvas.scale(1, (searchTop - top) / bottomGap);
+            headerPinnedFadeDrawable.draw(canvas);
+            canvas.restore();
+        }
+        if (end > searchTop) {
+            final float scale = (end - searchTop) / (fadeHeight - bottomGap);
+            canvas.save();
+            canvas.clipRect(0, searchTop, headerFadeView.getWidth(), end);
+            canvas.translate(0, searchTop - bottomGap * scale);
+            canvas.scale(1, scale);
+            headerPinnedFadeDrawable.draw(canvas);
+            canvas.restore();
+        }
+    }
+
+    private void captureHeaderBackdrop(Canvas canvas, RectF position) {
+        if (sheetBackdropBitmap == null || sheetBackdropBitmap.getBitmap() == null
+                || sheetSourceOffsetX == Integer.MIN_VALUE || sheetSourceOffsetY == Integer.MIN_VALUE) {
+            return;
+        }
+        // Share the Alert's backdrop coordinates, then add avatars. The white fallback alone made the
+        // collapsed header solid; the bottom controls keep their existing avatar-only capture.
+        canvas.save();
+        canvas.clipRect(0, Math.max(0, sheetBackgroundTop - dp(48)), containerView.getWidth(), getHeaderFadeBottom() + dp(48));
+        canvas.translate(-sheetSourceOffsetX, -sheetSourceOffsetY);
+        sheetBackdropBitmap.draw(canvas, position.left + sheetSourceOffsetX, position.top + sheetSourceOffsetY,
+                position.right + sheetSourceOffsetX, position.bottom + sheetSourceOffsetY);
+        canvas.restore();
+    }
+
+    private void updateSheetGeometry() {
+        if (containerView == null || containerView.getMeasuredWidth() <= 0 || containerView.getMeasuredHeight() <= 0) return;
+        final float extent = Math.max(1, dp(13));
+        final float progress = isFullscreen ? 1f : Math.max(0f, Math.min(1f, 1f - scrollOffsetY / extent));
+        // Extend only after the sheet reaches the status-bar area, continuously with the list offset.
+        final float naturalTop = scrollOffsetY + systemInsets.top - extent;
+        final float surfaceTop = isFullscreen ? 0 : naturalTop - (systemInsets.top - extent) * progress;
+        final float newTop = surfaceTop + currentPanTranslationY;
+        final boolean changed = sheetBackgroundTop != newTop || sheetPinnedToTopProgress != progress;
+        sheetPinnedToTopProgress = progress;
+        sheetBackgroundTop = newTop;
+        if (sheetGlassBackground != null) {
+            final float radius = dp(25) * (1f - progress);
+            if (sheetGlassRadius != radius) {
+                sheetGlassRadius = radius;
+                sheetGlassBackground.setRadius(radius, radius, 0, 0);
+            }
+            sheetGlassBackground.setBounds(backgroundPaddingLeft, Math.round(newTop),
+                    containerView.getMeasuredWidth() - backgroundPaddingLeft,
+                    Math.round(containerView.getMeasuredHeight() + dp(60) + backgroundPaddingTop + currentPanTranslationY));
+        }
+        if (changed) {
+            headerGlassNeedsCapture = true;
+            if (frameLayout != null) frameLayout.invalidate();
+            if (headerFadeView != null) headerFadeView.invalidate();
+        }
+        updateHeaderFade();
+    }
+
+    private void updateHeaderFade() {
+        if (headerFadeView != null && frameLayout != null) {
+            headerFadeView.setTranslationY(-containerView.getPaddingTop() * sheetPinnedToTopProgress);
+            final float fadeBottom = getHeaderFadeBottom();
+            headerFadeDrawable.setBounds(0, Math.round(Math.max(0, sheetBackgroundTop - headerFadeView.getY())),
+                    headerFadeView.getMeasuredWidth(), Math.max(0, Math.round(fadeBottom - headerFadeView.getY())));
+            final float radius = dp(25) * (1f - sheetPinnedToTopProgress);
+            if (headerSurfaceGlassRadius != radius) {
+                headerSurfaceGlassRadius = radius;
+                headerSurfaceGlass.setRadius(radius, radius, 0, 0);
+            }
+        }
+    }
+
+    private void invalidateSheetGlass() {
+        if (sheetBackdropSource != null) sheetBackdropSource.invalidateDisplayListForDrawables();
+        if (sheetBackdropFrostedSource != null) sheetBackdropFrostedSource.invalidateDisplayListForDrawables();
+        if (headerFadeView != null) headerFadeView.invalidate();
+        containerView.postInvalidateOnAnimation();
+    }
+
+    private void primeSheetGlass() {
+        if (shareClosed || !GlassEngine.getCurrentGlassSettings().isBlurEnabled || sheetBackdropCapture == null
+                || sheetBackdropView.getWidth() <= 0 || sheetBackdropView.getHeight() <= 0
+                || containerView.getWidth() <= 0 || containerView.getHeight() <= 0) {
+            return;
+        }
+        final int width = sheetBackdropView.getWidth(), height = sheetBackdropView.getHeight();
+        updateSheetGeometry();
+        if (!sheetBackdropInvalidated && sheetBackdropWidth == width && sheetBackdropHeight == height) {
+            return;
+        }
+        if (!initialBackdropPending && (backdropMaterialInvalidated
+                || backdropMaterialWidth != width || backdropMaterialHeight != height)) {
+            // Later size/theme changes cannot copy the window, which now contains the sheet itself.
+            final int bitmapWidth = Math.max(1, (width + 3) / 4), bitmapHeight = Math.max(1, (height + 3) / 4);
+            Bitmap material = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888);
+            Canvas materialCanvas = new Canvas(material);
+            materialCanvas.scale(bitmapWidth / (float) width, bitmapHeight / (float) height);
+            drawSheetBackdrop(materialCanvas);
+            setBackdropMaterial(material, width, height);
+        }
+
+        // Keep the capture in the chat's coordinates. Moving the sheet only changes its source offset.
+        GlassPositionsArray positions = new GlassPositionsArray();
+        positions.add(0, 0, width, height);
+        sheetBackdropColor.setColor(getThemedColor(Theme.key_dialogBackground));
+        sheetBackdropCapture.setPositions(positions);
+        sheetBackdropCapture.invalidate();
+        sheetBackdropWidth = width;
+        sheetBackdropHeight = height;
+        sheetBackdropInvalidated = false;
+        invalidateSheetGlass();
+        headerGlassNeedsCapture = true;
+    }
+
+    private void drawSheetBackdrop(Canvas canvas) {
+        final boolean wasDrawingBlur = SizeNotifierFrameLayout.drawingBlur;
+        SizeNotifierFrameLayout.drawingBlur = true;
+        capturingSheetBackdrop = true;
+        try {
+            sheetBackdropView.draw(canvas);
+        } finally {
+            capturingSheetBackdrop = false;
+            SizeNotifierFrameLayout.drawingBlur = wasDrawingBlur;
+        }
+    }
+
+    private void setBackdropMaterial(Bitmap material, int width, int height) {
+        final Bitmap immutableMaterial = material.copy(Bitmap.Config.ARGB_8888, false);
+        if (immutableMaterial != null) {
+            material.recycle();
+            material = immutableMaterial;
+        }
+        sheetBackdropBitmap.setBitmap(material);
+        sheetBackdropBitmap.getMatrix().setScale(width / (float) material.getWidth(), height / (float) material.getHeight());
+        backdropMaterialWidth = width;
+        backdropMaterialHeight = height;
+        backdropMaterialInvalidated = false;
+    }
+
+    private void prepareInitialBackdrop() {
+        if (shareClosed || !GlassEngine.getCurrentGlassSettings().isBlurEnabled) return;
+        final int width = sheetBackdropView.getWidth(), height = sheetBackdropView.getHeight();
+        if (width <= 0 || height <= 0) return;
+        final int[] location = new int[2];
+        sheetBackdropView.getLocationInWindow(location);
+        Rect source = new Rect(location[0], location[1], location[0] + width, location[1] + height);
+        final Bitmap material = Bitmap.createBitmap(Math.max(1, (width + 3) / 4),
+                Math.max(1, (height + 3) / 4), Bitmap.Config.ARGB_8888);
+        final int themeGeneration = backdropThemeGeneration;
+        initialBackdropPending = true;
+        try {
+            // Queue the copy before the sheet is attached, while the window still shows only the chat.
+            PixelCopy.request(parentActivity.getWindow(), source, material, result -> {
+                initialBackdropPending = false;
+                if (shareClosed) {
+                    material.recycle();
+                    return;
+                }
+                if (result == PixelCopy.SUCCESS && themeGeneration == backdropThemeGeneration
+                        && width == sheetBackdropView.getWidth() && height == sheetBackdropView.getHeight()) {
+                    setBackdropMaterial(material, width, height);
+                } else {
+                    material.recycle();
+                    backdropMaterialInvalidated = true;
+                }
+                sheetBackdropInvalidated = true;
+                primeSheetGlass();
+                invalidateSheetGlass();
+                headerGlassNeedsCapture = true;
+            }, new Handler(Looper.getMainLooper()));
+        } catch (IllegalArgumentException e) {
+            initialBackdropPending = false;
+            material.recycle();
+        }
+    }
+
+    private void primeHeaderGlass() {
+        if (!headerGlassNeedsCapture || scrollableViewNoiseSuppressor == null || iBlur3Capture == null
+                || !GlassEngine.getCurrentGlassSettings().isBlurEnabled) {
+            return;
+        }
+        updateSheetGeometry();
+        headerGlassNeedsCapture = false;
+        scrollableViewNoiseSuppressor.setupRenderNodes(getHeaderCapturePositions());
+        scrollableViewNoiseSuppressor.invalidateResultRenderNodes(iBlur3Capture, containerView.getWidth(), containerView.getHeight());
+    }
+
+    private GlassPositionsArray getHeaderCapturePositions() {
+        headerCapturePositions.set(glassEngine.getAllVisibleDrawablesWithDisplayListPositionsMerged());
+        final float outset = dp(48);
+        final float top = Math.max(0, Math.min(sheetBackgroundTop, frameLayout.getY()) - outset);
+        final float bottom = Math.min(containerView.getHeight(), getHeaderFadeBottom() + outset);
+        // The fade is not a capsule registered with the glass engine; include its full width on every capture.
+        headerCapturePositions.add(0, top, containerView.getWidth(), bottom);
+        float bottomTop = containerView.getHeight();
+        if (pickerBottom != null && pickerBottom.getVisibility() == View.VISIBLE && pickerBottom.getAlpha() > 0) {
+            bottomTop = Math.min(bottomTop, pickerBottom.getY() - outset);
+        }
+        if (frameLayout2 != null && frameLayout2.getVisibility() == View.VISIBLE && frameLayout2.getAlpha() > 0) {
+            bottomTop = Math.min(bottomTop, frameLayout2.getY() - outset);
+        }
+        if (timestampFrameLayout != null && timestampFrameLayout.getVisibility() == View.VISIBLE && timestampFrameLayout.getAlpha() > 0) {
+            bottomTop = Math.min(bottomTop, timestampFrameLayout.getY() - outset);
+        }
+        for (int i = 0; i < containerView.getChildCount(); i++) {
+            final View child = containerView.getChildAt(i);
+            if (child instanceof EmojiView && child.getVisibility() == View.VISIBLE && child.getAlpha() > 0) {
+                bottomTop = Math.min(bottomTop, child.getY() - outset);
+            }
+        }
+        bottomTop = Math.max(0, bottomTop);
+        if (bottomTop < containerView.getHeight()) {
+            headerCapturePositions.add(0, bottomTop, containerView.getWidth(), containerView.getHeight());
+        }
+        headerCaptureMerger.merge(headerCapturePositions, mergedHeaderCapturePositions);
+        return mergedHeaderCapturePositions;
+    }
+
+    private void updateSheetGlassPosition() {
+        if (sheetGlassBackground == null || !GlassEngine.getCurrentGlassSettings().isBlurEnabled
+                || containerView.getWidth() <= 0 || containerView.getHeight() <= 0) {
+            return;
+        }
+        primeSheetGlass();
+        sheetBackdropView.getLocationOnScreen(backdropPosition);
+        containerView.getLocationOnScreen(sheetPosition);
+        final int dx = sheetPosition[0] - backdropPosition[0];
+        final int dy = sheetPosition[1] - backdropPosition[1];
+        if (dx != sheetSourceOffsetX || dy != sheetSourceOffsetY) {
+            // The opening animation moves the root itself, outside the glass engine's relative positions.
+            sheetSourceOffsetX = dx;
+            sheetSourceOffsetY = dy;
+            sheetGlassBackground.setSourceOffset(dx, dy);
+            containerView.invalidate();
+            glassEngine.invalidate();
+            if (frameLayout != null) frameLayout.invalidate();
+            if (headerFadeView != null) headerFadeView.invalidate();
+        }
+    }
+
+    private void setupSheetGlass() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || parentActivity == null) return;
+        sheetBackdropView = parentFragment != null && parentFragment.getFragmentView() != null
+                ? parentFragment.getFragmentView() : parentActivity.getWindow().getDecorView();
+        sheetBackdropColor = new GlassSourceColor();
+        sheetBackdropColor.setColor(getThemedColor(Theme.key_dialogBackground));
+        sheetBackdropBitmap = new GlassSourceBitmap();
+        sheetBackdropCapture = new GlassCaptureSourceCanvas();
+        final IBlur3Capture capture = (canvas, position) -> {
+            if (sheetBackdropBitmap.getBitmap() != null) {
+                sheetBackdropBitmap.draw(canvas, position.left, position.top, position.right, position.bottom);
+            } else {
+                // A ready material is optional for the first frame: retain the immediate glass fallback.
+                drawSheetBackdrop(canvas);
+            }
+        };
+        sheetBackdropCapture.setCapture(capture);
+        sheetBackdropCapture.setRootView(sheetBackdropView);
+        sheetBackdropCapture.setAllowDownsample(true);
+        sheetBackdropSource = new GlassSourceRenderNode(sheetBackdropColor);
+        sheetBackdropSource.setUnderSource(sheetBackdropColor);
+        sheetBackdropSource.setGlassCaptureSourceCanvas(sheetBackdropCapture, GlassCaptureSourceCanvas.SourceIndex.GLASS);
+        sheetBackdropFrostedSource = new GlassSourceRenderNode(sheetBackdropColor);
+        sheetBackdropFrostedSource.setUnderSource(sheetBackdropColor);
+        sheetBackdropFrostedSource.setGlassCaptureSourceCanvas(sheetBackdropCapture, GlassCaptureSourceCanvas.SourceIndex.FROSTED_GLASS);
+        BlurredBackgroundDrawableViewFactory factory = new BlurredBackgroundDrawableViewFactory(
+                sheetBackdropSource, sheetBackdropFrostedSource, sheetBackdropColor);
+        factory.setLiquidGlassEffectAllowed(true);
+        factory.setOutset(dp(24));
+        final BlurredBackgroundProvider sheetColors = BlurredBackgroundProviderImpl.inputFieldShareAlert(resourcesProvider);
+        // Its source is fixed to the backdrop, so the root-relative glass engine must not reset its offset.
+        sheetGlassBackground = factory.create(containerView,
+                new BlurredBackgroundProviderBuilder(resourcesProvider)
+                        .setBackgroundColor((r, isDark) -> {
+                            return GlassEngine.getCurrentGlassSettings().isBlurEnabled
+                                    ? sheetColors.getBackgroundColor() : Theme.getColor(Theme.key_dialogBackground, r);
+                        })
+                        .setStrokeColorTop(0x60FFFFFF, 0x40FFFFFF)
+                        .setStrokeColorBottom(0x1A000000, 0x10FFFFFF)
+                        .setShadowColor(0x30000000, 0x50000000)
+                        .setShadowLayer(dp(12), 0, dp(3))
+                        .setStrokeWidth(dpf2(0.6f), dpf2(0.4f))
+                        .build());
+        sheetGlassBackground.setThickness(dp(24));
+        sheetGlassBackground.setIntensity(0.5f);
+        sheetGlassBackground.setHasPadding(false);
+        prepareInitialBackdrop();
+    }
+
     private final @Nullable DownscaleScrollableNoiseSuppressor scrollableViewNoiseSuppressor;
     private final @Nullable GlassSourceRenderNode iBlur3SourceGlassFrosted;
     private final @Nullable GlassSourceRenderNode iBlur3SourceGlass;
@@ -4830,15 +5305,14 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
     private BlurredBackgroundDrawable captionContainerBg;
 
     private void invalidateBlurCaptures(int flags) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || scrollableViewNoiseSuppressor == null) {
+        updateSearchFieldBackground();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || scrollableViewNoiseSuppressor == null
+                || frameLayout == null || containerView.getWidth() <= 0 || containerView.getHeight() <= 0) {
             return;
         }
 
-        if (BitwiseUtils.hasFlag(flags, GlassEngine.FLAG_INVALIDATED_POSITIONS)) {
-            GlassPositionsArray glassPositionsArray = glassEngine.getAllVisibleDrawablesWithDisplayListPositionsMerged();
-            scrollableViewNoiseSuppressor.setupRenderNodes(glassPositionsArray);
-        }
-
+        updateSheetGeometry();
+        scrollableViewNoiseSuppressor.setupRenderNodes(getHeaderCapturePositions());
         scrollableViewNoiseSuppressor.invalidateResultRenderNodes(iBlur3Capture, containerView.getWidth(), containerView.getHeight());
     }
 
@@ -4846,6 +5320,14 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
     public void onThemeColorsChanged() {
         try {
             super.onThemeColorsChanged();
+            if (sheetGlassBackground != null) sheetGlassBackground.updateColors();
+            if (headerFadeDrawable != null) headerFadeDrawable.updateColors();
+            if (headerPinnedFadeDrawable != null) headerPinnedFadeDrawable.updateColors();
+            sheetBackdropInvalidated = true;
+            backdropMaterialInvalidated = true;
+            backdropThemeGeneration++;
+            headerGlassNeedsCapture = true;
+            updateSearchFieldBackground();
             if (iBlur3SourceColor != null) {
                 iBlur3SourceColor.setColor(getThemedColor(Theme.key_windowBackgroundWhite));
             }
