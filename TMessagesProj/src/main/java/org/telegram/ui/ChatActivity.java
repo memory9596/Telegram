@@ -1061,6 +1061,40 @@ public class ChatActivity extends BaseFragment implements
 
     private final GlassSourceBitmap scrimBlur3SourceBitmap = new GlassSourceBitmap();
     private BlurredBackgroundDrawableViewFactory scrimBlur3Factory = new BlurredBackgroundDrawableViewFactory(scrimBlur3SourceBitmap);
+    private GlassSourceRenderNode reactionsGlassSource;
+    private BlurredBackgroundDrawableViewFactory reactionsGlassFactory;
+
+    private BlurredBackgroundDrawableViewFactory getReactionsGlassFactory() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return scrimBlur3Factory;
+        if (reactionsGlassFactory == null) {
+            reactionsGlassSource = new GlassSourceRenderNode(scrimBlur3Factory.getSource());
+            reactionsGlassFactory = new BlurredBackgroundDrawableViewFactory(reactionsGlassSource,
+                    scrimBlur3Factory.getSource(), scrimBlur3Factory.getSource());
+            reactionsGlassFactory.setLiquidGlassEffectAllowed(true);
+            reactionsGlassFactory.setOutset(dp(16));
+            reactionsGlassFactory.setGlassEngine(getGlassEngine());
+            reactionsGlassFactory.setLinkedDrawablesRef(glassAttachedDrawables);
+            reactionsGlassFactory.setLinkedViewsRef(glassAttachedViews);
+            reactionsGlassFactory.setSourceRootView(viewPositionWatcher,
+                    parentChatActivity != null ? parentChatActivity.contentView : contentView);
+            invalidateScrimGlass();
+        }
+        return reactionsGlassFactory;
+    }
+
+    private void invalidateScrimGlass() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && reactionsGlassSource != null && fragmentView != null) {
+            int width = fragmentView.getWidth(), height = fragmentView.getHeight();
+            if (width > 0 && height > 0) {
+                Canvas canvas = reactionsGlassSource.beginRecording(width, height);
+                scrimBlur3Factory.getSource().draw(canvas, 0, 0, width, height);
+                reactionsGlassSource.endRecording();
+                reactionsGlassSource.invalidateDisplayListForDrawables();
+            }
+            reactionsGlassFactory.invalidateAllLinkedViews();
+        }
+        scrimBlur3Factory.invalidateAllLinkedViews();
+    }
     private Bitmap scrimBlurBitmap;
     private BitmapShader scrimBlurBitmapShader;
     private Paint scrimBlurBitmapPaint;
@@ -4643,6 +4677,7 @@ public class ChatActivity extends BaseFragment implements
         glassBackgroundDrawableFactoryFrosted.setSourceRootView(viewPositionWatcher, parentView);
         navbarContentDrawableFactory.setSourceRootView(viewPositionWatcher, parentView);
         scrimBlur3Factory.setSourceRootView(viewPositionWatcher, parentView);
+        if (reactionsGlassFactory != null) reactionsGlassFactory.setSourceRootView(viewPositionWatcher, parentView);
 
         if (headerItem != null) {
             headerItem.setBlurredBackgroundFactory(scrimBlur3Factory, BlurredBackgroundProviderImpl.messageMenuBackground(resourceProvider));
@@ -11409,7 +11444,7 @@ public class ChatActivity extends BaseFragment implements
                     scrimBlurMatrix = new Matrix();
                     scrimBlur3SourceBitmap.setBitmap(bitmapOptions);
                     Blur3Utils.checkBitmapSourceMatrixScale(scrimBlur3SourceBitmap, fragmentView);
-                    scrimBlur3Factory.invalidateAllLinkedViews();
+                    invalidateScrimGlass();
                 });
             }
         } else {
@@ -12467,7 +12502,7 @@ public class ChatActivity extends BaseFragment implements
         ScrimOptions.makeGlobalBlurBitmaps((bitmapBg, bitmapOptions) -> {
             scrimBlur3SourceBitmap.setBitmap(bitmapOptions);
             Blur3Utils.checkBitmapSourceMatrixScale(scrimBlur3SourceBitmap, fragmentView);
-            scrimBlur3Factory.invalidateAllLinkedViews();
+            invalidateScrimGlass();
         });
     }
 
@@ -18877,7 +18912,7 @@ public class ChatActivity extends BaseFragment implements
         protected void onSizeChanged(int w, int h, int oldw, int oldh) {
             super.onSizeChanged(w, h, oldw, oldh);
             Blur3Utils.checkBitmapSourceMatrixScale(scrimBlur3SourceBitmap, fragmentView);
-            scrimBlur3Factory.invalidateAllLinkedViews();
+            invalidateScrimGlass();
         }
 
         @Override
@@ -33554,7 +33589,7 @@ public class ChatActivity extends BaseFragment implements
             } else {
                 final boolean tags = getUserConfig().getClientUserId() == getDialogId();
                 reactionsLayout = new ReactionsContainerLayout(tags ? ReactionsContainerLayout.TYPE_TAGS : ReactionsContainerLayout.TYPE_DEFAULT, ChatActivity.this, contentView.getContext(), currentAccount, getResourceProvider());
-                reactionsLayout.setBackgroundFactory(scrimBlur3Factory, BlurredBackgroundProviderImpl.messageMenuReactionsBackground(resourceProvider));
+                reactionsLayout.setBackgroundFactory(getReactionsGlassFactory(), BlurredBackgroundProviderImpl.messageMenuReactionsBackground(resourceProvider));
                 if (tags) {
                     reactionsLayout.setHint(getUserConfig().isPremium() ? LocaleController.getString(R.string.SavedTagReactionsHint2) : AndroidUtilities.replaceSingleTag(LocaleController.getString(R.string.SavedTagReactionsPremiumHint), Theme.key_windowBackgroundWhiteBlueText2, 0, () -> {
                         closeMenu(false);
