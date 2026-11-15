@@ -354,17 +354,34 @@ public class ScrimOptions extends Dialog {
             final Bitmap bitmapBg = AndroidUtilities.applyColorMatrix(bitmap, colorMatrixBg);
             bitmapBg.setHasAlpha(false);
 
-            final ColorMatrix colorMatrixOptions = new ColorMatrix();
-            colorMatrixOptions.setSaturation(Theme.isCurrentThemeDark() ? 2 : 3);
-            if (!Theme.isCurrentThemeDark()) {
-                AndroidUtilities.adjustBrightnessColorMatrix(colorMatrixOptions, Theme.isCurrentThemeDark() ? -.2f : -.07f);
-            }
-            final Bitmap bitmapOptions = AndroidUtilities.applyColorMatrix(bitmap, colorMatrixOptions);
-            bitmapOptions.setHasAlpha(false);
+            final Bitmap bitmapOptions = createOptionsBitmap(bitmap);
 
             bitmap.recycle();
             bitmaps.run(bitmapBg, bitmapOptions);
         }, 15);
+    }
+
+    public static void makeGlobalBlurBitmapForOptions(Utilities.Callback<Bitmap> onBitmapDone) {
+        AndroidUtilities.makeGlobalBlurBitmap(bitmap -> {
+            if (bitmap == null) {
+                onBitmapDone.run(null);
+                return;
+            }
+            final Bitmap bitmapOptions = createOptionsBitmap(bitmap);
+            bitmap.recycle();
+            onBitmapDone.run(bitmapOptions);
+        }, 15);
+    }
+
+    private static Bitmap createOptionsBitmap(Bitmap bitmap) {
+        final ColorMatrix colorMatrixOptions = new ColorMatrix();
+        colorMatrixOptions.setSaturation(Theme.isCurrentThemeDark() ? 2 : 3);
+        if (!Theme.isCurrentThemeDark()) {
+            AndroidUtilities.adjustBrightnessColorMatrix(colorMatrixOptions, Theme.isCurrentThemeDark() ? -.2f : -.07f);
+        }
+        final Bitmap bitmapOptions = AndroidUtilities.applyColorMatrix(bitmap, colorMatrixOptions);
+        bitmapOptions.setHasAlpha(false);
+        return bitmapOptions;
     }
 
     public static void makeGlobalBlurBitmaps(View cutToContainer, Utilities.Callback2<Bitmap, Bitmap> bitmaps) {

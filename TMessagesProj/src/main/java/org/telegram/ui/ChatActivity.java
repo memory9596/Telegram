@@ -12499,7 +12499,7 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private void updateScrimSourceBitmap() {
-        ScrimOptions.makeGlobalBlurBitmaps((bitmapBg, bitmapOptions) -> {
+        ScrimOptions.makeGlobalBlurBitmapForOptions(bitmapOptions -> {
             scrimBlur3SourceBitmap.setBitmap(bitmapOptions);
             Blur3Utils.checkBitmapSourceMatrixScale(scrimBlur3SourceBitmap, fragmentView);
             invalidateScrimGlass();
@@ -32393,7 +32393,7 @@ public class ChatActivity extends BaseFragment implements
             } else if (type >= 0 || type == -1 && single && (message.isSending() || message.isEditing()) && currentEncryptedChat == null) {
                 selectedObject = message;
                 selectedObjectGroup = groupedMessages;
-                fillMessageMenu(primaryMessage, icons, items, options);
+                fillMessageMenu(primaryMessage, icons, items, options, type);
             }
 
             if (selectedObject != null && selectedObject.isHiddenSensitive() && !selectedObject.isMediaSpoilersRevealed) {
@@ -33420,7 +33420,7 @@ public class ChatActivity extends BaseFragment implements
                                     fromLang[0] = lang;
                                     if (fromLang[0] != null && (!fromLang[0].equals(toLang) || !fromLang[0].equals(toLangDefault) || fromLang[0].equals(TranslateController.UNKNOWN_LANGUAGE)) && (
                                         translateEnabled && !RestrictedLanguagesSelectActivity.getRestrictedLanguages().contains(fromLang[0]) ||
-                                        (currentChat != null && (currentChat.has_link || ChatObject.isPublic(currentChat)) || selectedObject.messageOwner.fwd_from != null) && ("uk".equals(fromLang[0]) || "ru".equals(fromLang[0]))
+                                        (currentChat != null && (currentChat.has_link || ChatObject.isPublic(currentChat)) || message.messageOwner.fwd_from != null) && ("uk".equals(fromLang[0]) || "ru".equals(fromLang[0]))
                                     )) {
                                         cell.setVisibility(View.VISIBLE);
                                     }
@@ -33468,7 +33468,8 @@ public class ChatActivity extends BaseFragment implements
                                     updateTopPanel(true);
                                 }
                             });
-                            cell.postDelayed(() -> {
+                            // This item is not attached until showMenu runs, so its postDelayed cannot bound the wait.
+                            AndroidUtilities.runOnUIThread(() -> {
                                 if (onLangDetectionDone.get() != null) {
                                     onLangDetectionDone.getAndSet(null).run();
                                 }
@@ -33891,17 +33892,18 @@ public class ChatActivity extends BaseFragment implements
             final int finalPopupY = scrimPopupY = popupY;
             scrimPopupContainerLayout.setMaxHeight(maxY + height - popupY);
             ReactionsContainerLayout finalReactionsLayout = reactionsLayout;
+            final ActionBarPopupWindow menuWindow = scrimPopupWindow;
             Runnable showMenu = () -> {
-                if (scrimPopupWindow == null || fragmentView == null || scrimPopupWindow.isShowing() || !AndroidUtilities.isActivityRunning(getParentActivity())) {
+                if (scrimPopupWindow != menuWindow || fragmentView == null || menuWindow.isShowing() || !AndroidUtilities.isActivityRunning(getParentActivity())) {
                     return;
                 }
-                scrimPopupWindow.showAtLocation(chatListView, Gravity.LEFT | Gravity.TOP, finalPopupX, finalPopupY);
-                keepScrimPopupAboveKeyboard(scrimPopupWindow);
+                menuWindow.showAtLocation(chatListView, Gravity.LEFT | Gravity.TOP, finalPopupX, finalPopupY);
+                keepScrimPopupAboveKeyboard(menuWindow);
                 if (isReactionsAvailableFinal && finalReactionsLayout != null) {
                     finalReactionsLayout.startEnterAnimation(true);
                 }
                 AndroidUtilities.runOnUIThread(() -> {
-                    if (scrimPopupWindowItems != null && scrimPopupWindowItems.length > 0 && scrimPopupWindowItems[0] != null) {
+                    if (scrimPopupWindow == menuWindow && scrimPopupWindowItems != null && scrimPopupWindowItems.length > 0 && scrimPopupWindowItems[0] != null) {
                         scrimPopupWindowItems[0].requestFocus();
                         scrimPopupWindowItems[0].performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null);
                         scrimPopupWindowItems[0].sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED);
@@ -46799,9 +46801,13 @@ public class ChatActivity extends BaseFragment implements
         ArrayList<CharSequence> items,
         ArrayList<Integer> options
     ) {
+        fillMessageMenu(primaryMessage, icons, items, options, getMessageType(selectedObject));
+    }
+
+    private void fillMessageMenu(MessageObject primaryMessage, ArrayList<Integer> icons,
+                                 ArrayList<CharSequence> items, ArrayList<Integer> options, int type) {
         final MessageObject message = selectedObject;
         final MessageObject.GroupedMessages groupedMessages = selectedObjectGroup;
-        final int type = getMessageType(message);
         final boolean isEphemeral = message.isEphemeral();
         final boolean isEphemeralFromBot = isEphemeral && !message.isOut();
 
