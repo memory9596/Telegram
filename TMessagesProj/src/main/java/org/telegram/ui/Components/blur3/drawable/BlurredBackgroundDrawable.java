@@ -128,6 +128,10 @@ public class BlurredBackgroundDrawable extends GlassDrawable implements Theme.Co
     }
 
     public BlurredBackgroundDrawable setRadius(float radius) {
+        if (hasRadii(boundProps.radii, radius, radius, radius, radius)
+                && hasRadii(boundProps.shaderRadii, radius, radius, radius, radius)) {
+            return this;
+        }
         Arrays.fill(boundProps.radii, radius);
         Arrays.fill(boundProps.shaderRadii, radius);
         boundProps.build();
@@ -137,6 +141,9 @@ public class BlurredBackgroundDrawable extends GlassDrawable implements Theme.Co
     }
 
     public BlurredBackgroundDrawable setRadius(float topLeft, float topRight, float bottomRight, float bottomLeft) {
+        if (hasRadii(boundProps.radii, topLeft, topRight, bottomRight, bottomLeft)) {
+            return this;
+        }
         boundProps.radii[0] = boundProps.radii[1] = topLeft;
         boundProps.radii[2] = boundProps.radii[3] = topRight;
         boundProps.radii[4] = boundProps.radii[5] = bottomRight;
@@ -148,6 +155,10 @@ public class BlurredBackgroundDrawable extends GlassDrawable implements Theme.Co
     }
 
     public void setRadius(float topLeft, float topRight, float bottomRight, float bottomLeft, boolean forceBottomZero) {
+        if (hasRadii(boundProps.radii, topLeft, topRight, forceBottomZero ? 0 : bottomRight, forceBottomZero ? 0 : bottomLeft)
+                && hasRadii(boundProps.shaderRadii, topLeft, topRight, bottomRight, bottomLeft)) {
+            return;
+        }
         boundProps.radii[0] = boundProps.radii[1] = topLeft;
         boundProps.radii[2] = boundProps.radii[3] = topRight;
         boundProps.radii[4] = boundProps.radii[5] = forceBottomZero ? 0 : bottomRight;
@@ -159,6 +170,13 @@ public class BlurredBackgroundDrawable extends GlassDrawable implements Theme.Co
         boundProps.build();
 
         onBoundPropsChanged();
+    }
+
+    private static boolean hasRadii(float[] radii, float topLeft, float topRight, float bottomRight, float bottomLeft) {
+        return radii[0] == topLeft && radii[1] == topLeft
+                && radii[2] == topRight && radii[3] == topRight
+                && radii[4] == bottomRight && radii[5] == bottomRight
+                && radii[6] == bottomLeft && radii[7] == bottomLeft;
     }
 
     public BlurredBackgroundDrawable setThickness(int thickness) {
