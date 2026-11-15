@@ -740,6 +740,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 
                     blurredBackgroundDrawable.setBounds(AndroidUtilities.rectTmp2);
                     blurredBackgroundDrawable.setAlpha(bgPaint.getAlpha());
+                    blurredBackgroundDrawable.setRadius(radius);
                     blurredBackgroundDrawable.draw(canvas);
                 } else {
                     canvas.drawRoundRect(rect, radius, radius, bgPaint);
@@ -935,6 +936,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 
                 blurredBackgroundDrawable1.setBounds(AndroidUtilities.rectTmp2);
                 blurredBackgroundDrawable1.setAlpha(bgPaint.getAlpha());
+                blurredBackgroundDrawable1.setRadius(br);
                 blurredBackgroundDrawable1.draw(canvas);
             } else {
                 canvas.drawCircle(cx, cy, br, bgPaint);
@@ -959,6 +961,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
 
                 blurredBackgroundDrawable2.setBounds(AndroidUtilities.rectTmp2);
                 blurredBackgroundDrawable2.setAlpha(bgPaint.getAlpha());
+                blurredBackgroundDrawable2.setRadius(sr);
                 blurredBackgroundDrawable2.draw(canvas);
             } else {
                 canvas.drawCircle(cx, cy, sr, bgPaint);

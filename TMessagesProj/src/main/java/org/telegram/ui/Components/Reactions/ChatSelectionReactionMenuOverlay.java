@@ -26,6 +26,7 @@ import org.telegram.ui.Components.FragmentContextView;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.ReactionsContainerLayout;
 import org.telegram.ui.Components.RecyclerListView;
+import org.telegram.ui.Components.blur3.drawable.color.impl.BlurredBackgroundProviderImpl;
 
 import java.util.Collections;
 import java.util.List;
@@ -110,6 +111,8 @@ public class ChatSelectionReactionMenuOverlay extends FrameLayout {
                     }
                 }
             };
+            reactionsContainerLayout.setBackgroundFactory(parentFragment.getGlassHintFactory(),
+                    BlurredBackgroundProviderImpl.messageMenuReactionsBackground(parentFragment.getResourceProvider()));
             reactionsContainerLayout.setPadding(AndroidUtilities.dp(4) + (LocaleController.isRTL ? 0 : mSidePadding), AndroidUtilities.dp(4), AndroidUtilities.dp(4) + (LocaleController.isRTL ? mSidePadding : 0), AndroidUtilities.dp(mPadding));
             reactionsContainerLayout.setDelegate(new ReactionsContainerLayout.ReactionsContainerDelegate() {
                 @Override
