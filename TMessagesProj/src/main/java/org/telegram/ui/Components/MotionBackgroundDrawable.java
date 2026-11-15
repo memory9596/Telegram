@@ -34,6 +34,7 @@ import org.telegram.messenger.Utilities;
 import org.telegram.messenger.wallpaper.WallpaperGiftPatternPosition;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.Components.blur3.utils.BitmapChangeTracker;
+import org.telegram.ui.Components.blur3.utils.BitmapMemoizedMetadata;
 
 import java.lang.ref.WeakReference;
 import java.util.List;
@@ -83,6 +84,12 @@ public class MotionBackgroundDrawable extends Drawable {
     private Bitmap patternBitmap;
     private BitmapShader bitmapShader;
     private BitmapShader gradientShader;
+    private Bitmap gradientShaderPattern;
+    private final BitmapMemoizedMetadata<Bitmap> patternRenderBitmap = new BitmapMemoizedMetadata<>(bitmap -> {
+        if (bitmap == null || !bitmap.isMutable()) return bitmap;
+        Bitmap copy = bitmap.copy(bitmap.getConfig() != null ? bitmap.getConfig() : Bitmap.Config.ARGB_8888, false);
+        return copy != null ? copy : bitmap;
+    });
 
     private Bitmap patternGiftBitmap;
     private ImageReceiver giftImageReceiver;
@@ -454,6 +461,7 @@ public class MotionBackgroundDrawable extends Drawable {
             if (!useLegacyBitmap) {
                 bitmapShader = new BitmapShader(currentBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
                 gradientShader = new BitmapShader(patternBitmap, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+                gradientShaderPattern = patternBitmap;
                 disableGradientShaderScaling = doNotScale;
                 paint2.setShader(new ComposeShader(bitmapShader, gradientShader, PorterDuff.Mode.DST_IN));
                 paint2.setFilterBitmap(true);
@@ -490,7 +498,19 @@ public class MotionBackgroundDrawable extends Drawable {
         android.graphics.Rect bounds = getBounds();
         canvas.save();
 
-        final Bitmap patternBitmap = getOrBuildPatternWithGiftBitmap();
+        final Bitmap sourcePattern = getOrBuildPatternWithGiftBitmap();
+        final boolean isUseFastRender = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            && motionBackgroundPaint != null
+            && currentBitmap != null
+            && sourcePattern != null;
+        // The fallback path is also recorded into glass captures. Its pattern must keep one texture
+        // when that capture is replayed, just as the fast renderer's immutable alpha mask does.
+        final Bitmap patternBitmap = isUseFastRender ? sourcePattern : patternRenderBitmap.get(sourcePattern);
+        if (patternBitmap != null && intensity < 0 && !useLegacyBitmap && gradientShaderPattern != patternBitmap) {
+            gradientShaderPattern = patternBitmap;
+            gradientShader = new BitmapShader(patternBitmap, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+            paint2.setShader(new ComposeShader(bitmapShader, gradientShader, PorterDuff.Mode.DST_IN));
+        }
         float tr = patternBitmap != null ? bounds.top : translationY;
         int bitmapWidth = currentBitmap.getWidth();
         int bitmapHeight = currentBitmap.getHeight();
@@ -506,11 +526,6 @@ public class MotionBackgroundDrawable extends Drawable {
             y += bounds.top;
             canvas.clipRect(bounds.left, bounds.top, bounds.right, bounds.bottom);
         }
-
-        final boolean isUseFastRender = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-            && motionBackgroundPaint != null
-            && currentBitmap != null
-            && patternBitmap != null;
 
         if (intensity < 0) {
             if (!isUseFastRender && (!useLegacyBitmap || patternBitmap == null)) {

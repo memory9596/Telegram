@@ -373,10 +373,20 @@ public class MotionBackgroundPaint {
     }
 
     private static Bitmap getAlphaChannel(Bitmap bitmap) {
-        if (bitmap.getConfig() == Bitmap.Config.ALPHA_8) {
-            return bitmap;
+        final Bitmap alpha = bitmap.getConfig() == Bitmap.Config.ALPHA_8 ? bitmap : bitmap.extractAlpha();
+        if (!alpha.isMutable()) {
+            return alpha;
         }
-        return bitmap.extractAlpha();
+        // Shader snapshots can copy a mutable mask on each recording. Keep the memoized mask immutable
+        // so glass captures and wallpaper animation reuse its texture until the source pixels change.
+        final Bitmap immutable = alpha.copy(Bitmap.Config.ALPHA_8, false);
+        if (immutable == null) {
+            return alpha;
+        }
+        if (alpha != bitmap) {
+            alpha.recycle();
+        }
+        return immutable;
     }
 
     private static boolean isOne(float x) {
