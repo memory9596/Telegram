@@ -50,12 +50,23 @@ You will require JDK 17, Android Studio 2025.1.4, Android NDK 27.2.12479018 and 
    ```bash
    git submodule init && git submodule update --init --recursive --depth=1
    ```
+   Apply this fork's submodule patches after initializing or updating submodules (using Bash 4 or newer, including Git Bash on Windows):
+   ```bash
+   bash Tools/apply-patches.sh
+   ```
+   The build workflow runs this step automatically. Applied patches remain as local submodule changes; keep the submodule reference pinned to upstream.
 2. Copy your release.keystore into TMessagesProj/config
 3. Fill out RELEASE_KEY_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_STORE_PASSWORD in gradle.properties to access your  release.keystore
 4.  Go to https://console.firebase.google.com/, create two android apps with application IDs org.telegram.messenger and org.telegram.messenger.beta, turn on firebase messaging and download google-services.json, which should be copied to the same folder as TMessagesProj.
 5. Open the project in the Studio (note that it should be opened, NOT imported).
 6. Fill out values in TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java – there’s a link for each of the variables showing where and which data to obtain.
 7. You are ready to compile Telegram.
+
+### Submodule patches
+
+Shell tools use lowercase names with hyphens under `Tools/`. Store patches under `patches/<submodule-path>/`, mirroring the submodule's path in this repository. Name them `NNNN-description.patch` with a four-digit sequence number and a lowercase description separated by hyphens. Patch file paths are relative to the submodule root.
+
+For example, `patches/TMessagesProj_Modules/media/0001-preserve-hls-variant-metadata.patch` targets the media submodule. `bash Tools/apply-patches.sh` discovers submodule targets from these directories, checks that each target is a tracked, initialized submodule, and applies patches in filename order. Already applied sequences are skipped; newly appended patches are applied after the existing sequence. Conflicts stop the script without modifying that submodule. When updating a sequence's existing patches, reset only those patches or update a clean submodule checkout before applying it again.
 
 ### Localization
 

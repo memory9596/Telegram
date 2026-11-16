@@ -23,6 +23,9 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      - name: Apply submodule patches
+        run: bash Tools/apply-patches.sh
+
       - name: Setup jdk
         uses: actions/setup-java@v6
         with:
