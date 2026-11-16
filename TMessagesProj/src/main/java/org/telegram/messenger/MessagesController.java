@@ -11788,12 +11788,11 @@ public class MessagesController extends BaseController implements NotificationCe
                     inputDialogPeer.peer = inputPeer;
                     req.peers.add(inputDialogPeer);
 
-                    getConnectionsManager().sendRequest(req, (response, error) -> {
+                    int reqId = getConnectionsManager().sendRequest(req, (response, error) -> {
                         if (response != null) {
                             TLRPC.TL_messages_peerDialogs res = (TLRPC.TL_messages_peerDialogs) response;
-                            if (!res.dialogs.isEmpty()) {
-                                TLRPC.Dialog dialog = res.dialogs.get(0);
-
+                            TLRPC.Dialog dialog = res.dialogs.isEmpty() ? null : res.dialogs.get(0);
+                            if (dialog != null) {
                                 if (dialog.top_message != 0 && (chat == null || !ChatObject.isNotInChat(chat))) {
                                     TLRPC.TL_messages_dialogs dialogs = new TLRPC.TL_messages_dialogs();
                                     dialogs.chats = res.chats;
@@ -11802,15 +11801,16 @@ public class MessagesController extends BaseController implements NotificationCe
                                     dialogs.messages = res.messages;
                                     getMessagesStorage().putDialogs(dialogs, 2);
                                 }
-
-                                loadMessagesInternal(dialogId, mergeDialogId, loadInfo, count, max_id, offset_date, false, minDate, classGuid, load_type, dialog.top_message, 0, threadMessageId, loadIndex, first_unread, dialog.unread_count, last_date, queryFromServer, dialog.unread_mentions_count, false, processMessages, isTopic, null, 0L);
                             }
+                            // A readable channel need not have a dialog entry, especially when opened from a forward.
+                            loadMessagesInternal(dialogId, mergeDialogId, loadInfo, count, max_id, offset_date, false, minDate, classGuid, load_type, dialog != null ? dialog.top_message : last_message_id, 0, threadMessageId, loadIndex, first_unread, dialog != null ? dialog.unread_count : unread_count, last_date, queryFromServer, dialog != null ? dialog.unread_mentions_count : mentionsCount, false, processMessages, isTopic, null, 0L);
                         } else {
                             AndroidUtilities.runOnUIThread(() -> {
                                 getNotificationCenter().postNotificationName(NotificationCenter.loadingMessagesFailed, classGuid, req, error);
                             });
                         }
                     });
+                    getConnectionsManager().bindRequestToGuid(reqId, classGuid);
                     return;
                 }
                 TLRPC.TL_messages_getHistory req = new TLRPC.TL_messages_getHistory();
