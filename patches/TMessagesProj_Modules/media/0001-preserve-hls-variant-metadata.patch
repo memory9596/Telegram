@@ -1,0 +1,15 @@
+diff --git a/libraries/common/src/main/java/androidx/media3/common/Format.java b/libraries/common/src/main/java/androidx/media3/common/Format.java
+index 7134cae7ef..70d19658c2 100644
+--- a/libraries/common/src/main/java/androidx/media3/common/Format.java
++++ b/libraries/common/src/main/java/androidx/media3/common/Format.java
+@@ -1379,6 +1379,10 @@ public final class Format {
+ 
+     return buildUpon()
+         .setId(id)
++        .setDocumentId(manifestFormat.documentId)
++        .setCurrentAccount(manifestFormat.currentAccount)
++        .setCached(manifestFormat.cached)
++        .setDocumentFilename(manifestFormat.documentFilename)
+         .setLabel(label)
+         .setLabels(labels)
+         .setLanguage(language)
