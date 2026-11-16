@@ -211,12 +211,9 @@ public class FilePathDatabase {
                 syncLatch.await();
             } catch (Exception ignore) {
             }
-            if (res[0] != null) {
-                cache.put(key, res[0]);
-            } else {
-                cache.put(key, NULL_PATH);
-            }
-            return res[0];
+            cache.putIfAbsent(key, res[0] != null ? res[0] : NULL_PATH);
+            path = cache.get(key);
+            return path == NULL_PATH ? null : path;
         } else {
             if (database == null) {
                 return null;
@@ -238,12 +235,9 @@ public class FilePathDatabase {
                     cursor.dispose();
                 }
             }
-            if (res != null) {
-                cache.put(key, res);
-            } else {
-                cache.put(key, NULL_PATH);
-            }
-            return res;
+            cache.putIfAbsent(key, res != null ? res : NULL_PATH);
+            path = cache.get(key);
+            return path == NULL_PATH ? null : path;
         }
     }
 
@@ -269,6 +263,8 @@ public class FilePathDatabase {
     }
 
     public void putPath(long id, int dc, int type, int flags, String path) {
+        // Download completion can reach the UI before the queued database write.
+        cache.put(id + "_" + dc + "_" + type, path != null ? path : NULL_PATH);
         postRunnable(() -> {
             if (BuildVars.DEBUG_VERSION) {
                 FileLog.d("put file path id=" + id + " dc=" + dc + " type=" + type + " path=" + path);
@@ -294,10 +290,8 @@ public class FilePathDatabase {
                     state.bindInteger(5, flags);
                     state.step();
                     state.dispose();
-                    cache.put(id + "_" + dc + "_" + type, path);
                 } else {
                     database.executeFast("DELETE FROM paths WHERE document_id = " + id + " AND dc_id = " + dc + " AND type = " + type).stepThis().dispose();
-                    cache.put(id + "_" + dc + "_" + type, NULL_PATH);
                 }
             } catch (SQLiteException e) {
                 FileLog.e(e);

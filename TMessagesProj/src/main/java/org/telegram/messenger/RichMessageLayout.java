@@ -7746,8 +7746,7 @@ public class RichMessageLayout {
         public void updateButtonState(boolean animated) {
             final int currentAccount = root.currentAccount;
             final String fileName = FileLoader.getAttachFileName(currentDocument);
-            final File path = currentDocument == null ? null : FileLoader.getInstance(currentAccount).getPathToAttach(currentDocument, true);
-            final boolean fileExists = path != null && path.exists();
+            final boolean fileExists = FileDownloadTasks.localFile(currentAccount, currentDocument, currentMessageObject) != null;
             if (TextUtils.isEmpty(fileName)) {
                 radialProgress.setIcon(MediaActionDrawable.ICON_NONE, false, false);
                 return;
