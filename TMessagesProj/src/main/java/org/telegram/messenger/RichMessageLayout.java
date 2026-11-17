@@ -448,6 +448,7 @@ public class RichMessageLayout {
     }
 
     public void reposition() {
+        final int oldHeight = height;
         height = 0;
         minWidth = 0;
         textBlocks.clear();
@@ -503,6 +504,9 @@ public class RichMessageLayout {
         }
         height = y;
         joinedText = joined;
+        if (height != oldHeight && view instanceof PreviewView) {
+            view.requestLayout();
+        }
     }
 
     public String getSelectionHtml(int selStart, int selEnd) {
@@ -700,7 +704,7 @@ public class RichMessageLayout {
         this.view = null;
         for (int i = 0; i < blocks.size(); ++i)
             blocks.get(i).detach(view);
-        if (view == cell) {
+        if (view == cell || view instanceof PreviewView) {
             cell = null;
             delegate = null;
         }
@@ -1796,10 +1800,11 @@ public class RichMessageLayout {
     }
 
     private boolean scrollToPageBlockAnchor(int blockIndex) {
-        if (cell == null) return false;
+        final View anchorView = cell != null ? cell : view;
+        if (anchorView == null) return false;
         if (blockIndex < 0 || blockIndex >= blocks.size()) return false;
 
-        ViewParent p = cell.getParent();
+        ViewParent p = anchorView.getParent();
         RecyclerView list = null;
         while (p != null) {
             if (p instanceof RecyclerView) {
@@ -1810,8 +1815,23 @@ public class RichMessageLayout {
         }
         if (list == null) return false;
 
+        final ArrayList<RichDetailsBlock> closedDetails = new ArrayList<>();
+        for (RichDetailsBlock details = blocks.get(blockIndex).parentDetails; details != null; details = details.parentDetails) {
+            if (!details.block.open) closedDetails.add(details);
+        }
+        if (!closedDetails.isEmpty()) {
+            openDetails(closedDetails);
+            anchorView.post(() -> {
+                if (cell == anchorView || view == anchorView) scrollToPageBlockAnchor(blockIndex);
+            });
+            return true;
+        }
+
         final int blockY = getBlockTop(blockIndex, null);
-        final int targetInList = cell.getTop() + cell.textY + blockY;
+        final Rect bounds = new Rect();
+        list.offsetDescendantRectToMyCoords(anchorView, bounds);
+        final int textY = cell != null ? cell.textY : anchorView instanceof PreviewView ? ((PreviewView) anchorView).insetTop : 0;
+        final int targetInList = bounds.top + textY + blockY;
         final int delta = targetInList - list.getPaddingTop() - dp(8);
         list.smoothScrollBy(0, delta);
         return true;
@@ -3170,7 +3190,7 @@ public class RichMessageLayout {
             }
             final ChatMessageCell.ChatMessageCellDelegate delegate = root.getDelegate();
             final ChatMessageCell cell = root.getCell();
-            if (delegate != null && cell != null) {
+            if (delegate != null) {
                 if (view != null && !longPress) {
                     view.playSoundEffect(SoundEffectConstants.CLICK);
                 }
@@ -3243,6 +3263,7 @@ public class RichMessageLayout {
             }
         }
         public void onDetachedFromWindow() {
+            cancelLongPress();
             AnimatedEmojiSpan.release(view, animatedEmojiStack);
             animatedEmojiStack = null;
             if (linkCollector != null) {
@@ -5903,7 +5924,7 @@ public class RichMessageLayout {
         }
 
         public void didPress(ChatMessageCell cell, ChatMessageCell.ChatMessageCellDelegate delegate, boolean longPress) {
-            if (cell == null || delegate == null) {
+            if (delegate == null) {
                 return;
             }
             if (longPress) {
@@ -10029,6 +10050,16 @@ public class RichMessageLayout {
         private TL_iv.RichMessage richMessage;
 
         private RichMessageLayout layout;
+        private ChatMessageCell.ChatMessageCellDelegate delegate;
+
+        public RichMessageLayout getLayout() {
+            return layout;
+        }
+
+        public void setDelegate(ChatMessageCell.ChatMessageCellDelegate delegate) {
+            this.delegate = delegate;
+            if (layout != null) layout.setChatMessageCellDelegate(null, delegate);
+        }
 
         public PreviewView(Context context) {
             this(context, UserConfig.selectedAccount, null);
@@ -10078,11 +10109,13 @@ public class RichMessageLayout {
 
         private TextSelectionHelper.ArticleTextSelectionHelper textSelectionHelper;
         public void setTextSelectionHelper(TextSelectionHelper.ArticleTextSelectionHelper textSelectionHelper) {
+            if (textSelectionLongPressRunnable != null) removeCallbacks(textSelectionLongPressRunnable);
             this.textSelectionHelper = textSelectionHelper;
         }
 
         public void set(TL_iv.RichMessage rich_message) {
             if (richMessage == rich_message) return;
+            if (textSelectionHelper != null) textSelectionHelper.clear(true);
             richMessage = rich_message;
             if (messageObject == null) {
                 final TLRPC.TL_message message = new TLRPC.TL_message();
@@ -10106,6 +10139,7 @@ public class RichMessageLayout {
             }
             if (layout != null) layout.detach(this);
             layout = new RichMessageLayout(messageObject, width, null);
+            layout.setChatMessageCellDelegate(null, delegate);
             layout.forceTranslationLoading = translationLoading;
             layout.setResourcesProvider(resourcesProvider);
             layout.invalidateAnimatedEmojiInParent = true;
@@ -10187,6 +10221,7 @@ public class RichMessageLayout {
             super.onAttachedToWindow();
             if (layout != null) {
                 layout.attach(this);
+                layout.setChatMessageCellDelegate(null, delegate);
                 layout.updateAnimatedEmojis(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES);
             }
         }
@@ -10194,6 +10229,7 @@ public class RichMessageLayout {
         @Override
         protected void onDetachedFromWindow() {
             super.onDetachedFromWindow();
+            if (textSelectionLongPressRunnable != null) removeCallbacks(textSelectionLongPressRunnable);
             if (layout != null) layout.detach(this);
         }
 

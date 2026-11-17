@@ -21286,18 +21286,23 @@ public class ChatActivity extends BaseFragment implements
         if (messageCell == null || targetBlock == null || getParentActivity() == null) return false;
         MessageObject messageObject = messageCell.getMessageObject();
         if (messageObject == null || messageObject.messageOwner == null || messageObject.richLayout == null) return false;
-        final TL_iv.RichMessage richMessage = messageObject.messageOwner.rich_message;
+        return openArticlePhoto(messageObject, messageObject.richLayout, targetBlock);
+    }
+
+    private boolean openArticlePhoto(MessageObject messageObject, RichMessageLayout layout, TL_iv.PageBlock targetBlock) {
+        if (messageObject == null || layout == null || targetBlock == null || getParentActivity() == null) return false;
+        final TL_iv.RichMessage richMessage = layout.richMessage;
         if (richMessage == null) return false;
 
         final ArrayList<TL_iv.PageBlock> pageBlocks = new ArrayList<>();
-        messageObject.richLayout.collectMediaBlocks(pageBlocks);
+        layout.collectMediaBlocks(pageBlocks);
         final int index = pageBlocks.indexOf(targetBlock);
         if (index < 0) return false;
 
         PhotoViewer photoViewer = PhotoViewer.getInstance();
         photoViewer.setParentActivity(this);
         return photoViewer.openPhoto(index,
-            new ChatArticlePageBlocksAdapter(richMessage, pageBlocks, messageObject),
+            new ChatArticlePageBlocksAdapter(richMessage, pageBlocks, messageObject, layout),
             new ChatArticlePhotoViewerProvider(pageBlocks));
     }
 
@@ -21353,11 +21358,13 @@ public class ChatActivity extends BaseFragment implements
         private final TL_iv.RichMessage page;
         private final List<TL_iv.PageBlock> blocks;
         private final MessageObject messageObject;
+        private final RichMessageLayout layout;
 
-        ChatArticlePageBlocksAdapter(TL_iv.RichMessage page, List<TL_iv.PageBlock> blocks, MessageObject messageObject) {
+        ChatArticlePageBlocksAdapter(TL_iv.RichMessage page, List<TL_iv.PageBlock> blocks, MessageObject messageObject, RichMessageLayout layout) {
             this.page = page;
             this.blocks = blocks;
             this.messageObject = messageObject;
+            this.layout = layout;
         }
 
         @Override
@@ -21430,8 +21437,8 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public void updateSlideshowCell(TL_iv.PageBlock currentPageBlock) {
-            if (messageObject != null && messageObject.richLayout != null) {
-                messageObject.richLayout.setSlideshowPage(currentPageBlock);
+            if (layout != null) {
+                layout.setSlideshowPage(currentPageBlock);
             }
         }
 
@@ -33346,7 +33353,8 @@ public class ChatActivity extends BaseFragment implements
                         int[] messageIdToTranslate = new int[] { message.getId() };
                         final CharSequence finalMessageText = message.getMessageTextToTranslate(groupedMessages, messageIdToTranslate);
                         Utilities.CallbackReturn<URLSpan, Boolean> onLinkPress = (link) -> {
-                            didPressMessageUrl(link, false, selectedObject, v instanceof ChatMessageCell ? (ChatMessageCell) v : null);
+                            final ChatMessageCell sourceCell = v instanceof ChatMessageCell ? (ChatMessageCell) v : null;
+                            didPressMessageUrl(link, false, message, sourceCell != null && sourceCell.getMessageObject() == message ? sourceCell : null);
                             return true;
                         };
                         TLRPC.InputPeer inputPeer = selectedObject != null && (selectedObject.isPoll() || selectedObject.isVoiceTranscriptionOpen() || selectedObject.isSponsored() || selectedObject.scheduled || chatMode == MODE_QUICK_REPLIES) ? null : getMessagesController().getInputPeer(dialog_id);
@@ -33359,8 +33367,34 @@ public class ChatActivity extends BaseFragment implements
                                 if (selectedObject == null || i >= options.size() || getParentActivity() == null) {
                                     return;
                                 }
+                                final MessageObject sourceMessage = selectedObject;
+                                final ChatMessageCell sourceCell = v instanceof ChatMessageCell ? (ChatMessageCell) v : null;
                                 String toLangValue = fromLang != null && fromLang.equals(toLang) ? toLangDefault : toLang;
                                 TranslateAlert2 alert = TranslateAlert2.showAlert(getParentActivity(), this, currentAccount, inputPeer, messageIdToTranslate[0], fromLang, toLangValue, richMessageToTranslate, noforwardsOrPaidMedia, onLinkPress, () -> dimBehindView(false));
+                                alert.setRichMessageDelegate(new ChatMessageCell.ChatMessageCellDelegate() {
+                                    @Override
+                                    public void didPressUrl(ChatMessageCell cell, CharacterStyle url, boolean longPress) {
+                                        didPressMessageUrl(url, longPress, sourceMessage, sourceCell != null && sourceCell.getMessageObject() == sourceMessage ? sourceCell : null);
+                                    }
+
+                                    @Override
+                                    public void didPressBotButton(ChatMessageCell cell, TL_keyboard.KeyboardButtonProto button) {
+                                        if (sourceCell == null || sourceCell.getMessageObject() != sourceMessage) return;
+                                        alert.dismiss();
+                                        getChatMessageCellDelegate().didPressBotButton(sourceCell, button);
+                                    }
+
+                                    @Override
+                                    public void didLongPressBotButton(ChatMessageCell cell, TL_keyboard.KeyboardButtonProto button) {
+                                        if (sourceCell == null || sourceCell.getMessageObject() != sourceMessage) return;
+                                        getChatMessageCellDelegate().didLongPressBotButton(sourceCell, button);
+                                    }
+
+                                    @Override
+                                    public boolean openArticlePhoto(ChatMessageCell cell, TL_iv.PageBlock block) {
+                                        return ChatActivity.this.openArticlePhoto(sourceMessage, alert.getRichMessageLayout(), block);
+                                    }
+                                });
                                 alert.setDimBehind(false);
                                 closeMenu(false);
 

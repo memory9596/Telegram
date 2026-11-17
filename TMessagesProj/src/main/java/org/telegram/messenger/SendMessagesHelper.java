@@ -9854,7 +9854,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         accountInstance.getSendMessagesHelper().editRichMessage(editingMessageObject, rich, users, fragment, false);
     }
 
-    private static TL_iv.TL_inputRichMessage richMessageToInputRichMessage(TL_iv.RichMessage rich, ArrayList<TLRPC.InputUser> users) {
+    public static TL_iv.TL_inputRichMessage richMessageToInputRichMessage(TL_iv.RichMessage rich, ArrayList<TLRPC.InputUser> users) {
         TL_iv.TL_inputRichMessage out = new TL_iv.TL_inputRichMessage();
         if (rich == null) {
             return out;
