@@ -6389,23 +6389,63 @@ public class MessagesController extends BaseController implements NotificationCe
             }
             Integer msgId = (Integer) args[0];
             Integer newMsgId = (Integer) args[1];
+            TLRPC.Message serverMessage = args[2] instanceof TLRPC.Message ? (TLRPC.Message) args[2] : null;
             Long did = (Long) args[3];
             ArrayList<MessageObject> dialogMessages = dialogMessage.get(did);
+            MessageObject updatedDialogMessage = null;
+            int updatedDialogMessageIndex = -1;
             for (int i = 0; dialogMessages != null && i < dialogMessages.size(); ++i) {
                 MessageObject obj = dialogMessages.get(i);
                 if (obj != null && (obj.getId() == msgId || obj.messageOwner.local_id == msgId)) {
-                    obj.messageOwner.id = newMsgId;
-                    obj.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SENT;
-                }
-                obj = dialogMessagesByIds.get(msgId);
-                if (obj != null) {
-                    dialogMessagesByIds.remove(msgId);
-                    dialogMessagesByIds.put(newMsgId, obj);
+                    updatedDialogMessage = obj;
+                    updatedDialogMessageIndex = i;
+                    break;
                 }
             }
+            MessageObject mappedDialogMessage = dialogMessagesByIds.get(msgId);
+            if (updatedDialogMessage == null) {
+                updatedDialogMessage = mappedDialogMessage;
+            }
+            if (updatedDialogMessage != null) {
+                MessageObject oldDialogMessage = updatedDialogMessage;
+                if (serverMessage != null) {
+                    serverMessage.id = newMsgId;
+                    serverMessage.send_state = MessageObject.MESSAGE_SEND_STATE_SENT;
+                    updatedDialogMessage = new MessageObject(currentAccount, serverMessage, false, false);
+                    updatedDialogMessage.copyStableParams(oldDialogMessage);
+                    updatedDialogMessage.deleted = oldDialogMessage.deleted;
+                    updatedDialogMessage.deletedByThanos = oldDialogMessage.deletedByThanos;
+                    if (oldDialogMessage.getGroupIdForUse() != 0 && serverMessage.grouped_id != 0) {
+                        updatedDialogMessage.localSentGroupId = oldDialogMessage.getGroupIdForUse();
+                    }
+                    if (oldDialogMessage.messageOwner.random_id != 0) {
+                        dialogMessagesByRandomIds.remove(oldDialogMessage.messageOwner.random_id);
+                    }
+                    if (updatedDialogMessage.messageOwner.random_id != 0) {
+                        dialogMessagesByRandomIds.put(updatedDialogMessage.messageOwner.random_id, updatedDialogMessage);
+                    }
+                } else {
+                    updatedDialogMessage.messageOwner.id = newMsgId;
+                    updatedDialogMessage.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SENT;
+                }
+                if (updatedDialogMessageIndex >= 0) {
+                    dialogMessages.set(updatedDialogMessageIndex, updatedDialogMessage);
+                }
+            }
+            if (mappedDialogMessage != null) {
+                dialogMessagesByIds.remove(msgId);
+                dialogMessagesByIds.put(newMsgId, updatedDialogMessage != null ? updatedDialogMessage : mappedDialogMessage);
+            }
             TLRPC.Dialog dialog = dialogs_dict.get(did);
-            if (dialog != null && dialog.top_message == msgId) {
-                dialog.top_message = newMsgId;
+            boolean reloadDialogs = serverMessage != null && updatedDialogMessage != null;
+            if (dialog != null && (dialog.top_message == msgId || dialog.top_message == newMsgId)) {
+                if (dialog.top_message == msgId) {
+                    dialog.top_message = newMsgId;
+                }
+                reloadDialogs = true;
+            }
+            if (reloadDialogs) {
+                getTranslateController().checkDialogMessage(did);
                 getNotificationCenter().postNotificationName(NotificationCenter.dialogsNeedReload);
             }
             if (DialogObject.isChatDialog(did)) {
