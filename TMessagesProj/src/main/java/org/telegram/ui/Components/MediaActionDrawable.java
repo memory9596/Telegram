@@ -192,9 +192,6 @@ public class MediaActionDrawable extends Drawable {
         }
         if (icon == ICON_CANCEL || icon == ICON_CANCEL_FILL) {
             downloadRadOffset = 112;
-            animatedDownloadProgress = 0.0f;
-            downloadProgressAnimationStart = 0.0f;
-            downloadProgressTime = 0.0f;
         }
         invalidateSelf();
         return true;
@@ -209,7 +206,7 @@ public class MediaActionDrawable extends Drawable {
     }
 
     public void setProgress(float value, boolean animated) {
-        if (downloadProgress == value) {
+        if (downloadProgress == value && (animated || animatedDownloadProgress == value)) {
             return;
         }
         if (!animated) {
