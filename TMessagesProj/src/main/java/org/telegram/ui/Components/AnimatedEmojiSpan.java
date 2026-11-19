@@ -830,7 +830,20 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
 
             @Override
             public void invalidate() {
-                if (count > 0) EmojiGroupedSpans.this.invalidate();
+                if (count <= 0) return;
+                if (viewportManaged) {
+                    if (!visibleOnScreen) return;
+                    boolean needsInvalidate = false;
+                    for (int i = 0; i < backgroundDrawingArray.size(); i++) {
+                        SpansChunk chunk = backgroundDrawingArray.get(i);
+                        if (!chunk.hidden && (!chunk.visibleHoldersReady || !chunk.visibleHolders.isEmpty())) {
+                            needsInvalidate = true;
+                            break;
+                        }
+                    }
+                    if (!needsInvalidate) return;
+                }
+                EmojiGroupedSpans.this.invalidate();
             }
         }
 
