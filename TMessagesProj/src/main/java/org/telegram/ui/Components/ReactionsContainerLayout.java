@@ -1895,7 +1895,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
                         protected boolean setImageBitmapByKey(Drawable drawable, String key, int type, boolean memCache, int guid) {
                             if (drawable instanceof RLottieDrawable) {
                                 RLottieDrawable rLottieDrawable = (RLottieDrawable) drawable;
-                                rLottieDrawable.setCurrentFrame(0, false, true);
+                                rLottieDrawable.setCurrentFrame(0, true, true);
                             }
                             return super.setImageBitmapByKey(drawable, key, type, memCache, guid);
                         }
@@ -1966,7 +1966,7 @@ public class ReactionsContainerLayout extends FrameLayout implements Notificatio
                             if (rez) {
                                 if (drawable instanceof RLottieDrawable) {
                                     RLottieDrawable rLottieDrawable = (RLottieDrawable) drawable;
-                                    rLottieDrawable.setCurrentFrame(0, false, true);
+                                    rLottieDrawable.setCurrentFrame(0, true, true);
                                     rLottieDrawable.stop();
                                 }
                             }
