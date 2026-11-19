@@ -9509,7 +9509,25 @@ public class MessageObject {
                 hasSingleCode = codeSpans.length == 1 && spanned.getSpanStart(codeSpans[0]) == 0 && spanned.getSpanEnd(codeSpans[0]) == spanned.length();
             }
 
-            StaticLayout textLayout;
+            ArrayList<TextRange> captionRanges = null;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+                    && (messageObject == null || !messageObject.isRepostPreview)
+                    && text instanceof Spanned && hasQuote && !hasCode && !hasSingleQuote) {
+                // Keep the original shaping order until quote line heights are finalized.
+                boolean canSplitEarly = true;
+                for (QuoteSpan.QuoteStyleSpan span : ((Spanned) text).getSpans(0, text.length(), QuoteSpan.QuoteStyleSpan.class)) {
+                    if (span.span.adaptLineHeight) {
+                        canSplitEarly = false;
+                        break;
+                    }
+                }
+                if (canSplitEarly) {
+                    captionRanges = new ArrayList<>();
+                    cutIntoRanges(text, captionRanges);
+                    if (captionRanges.size() <= 1) captionRanges = null;
+                }
+            }
+            StaticLayout textLayout = null;
 
             if (hasSingleQuote) {
                 width -= AndroidUtilities.dp(32);
@@ -9519,7 +9537,10 @@ public class MessageObject {
 
             int textLayoutOriginalWidth;
             try {
-                textLayout = makeStaticLayout(text, textPaint, textLayoutOriginalWidth = width, 1f, 0f, false);
+                textLayoutOriginalWidth = width;
+                if (captionRanges == null) {
+                    textLayout = makeStaticLayout(text, textPaint, width, 1f, 0f, false);
+                }
             } catch (Exception e) {
                 FileLog.e(e);
                 return;
@@ -9578,7 +9599,7 @@ public class MessageObject {
                 width += AndroidUtilities.dp(15);
             }
 
-            int linesCount = textLayout.getLineCount();
+            int linesCount = textLayout == null ? 0 : textLayout.getLineCount();
             int linesPreBlock = LINES_PER_BLOCK;
 
             int blocksCount;
@@ -9591,10 +9612,12 @@ public class MessageObject {
             int linesOffset = 0;
             float prevOffset = 0;
 
-            ArrayList<TextRange> textRanges = new ArrayList<>();
+            ArrayList<TextRange> textRanges = captionRanges == null ? new ArrayList<>() : captionRanges;
             if (text instanceof Spanned && (hasQuote || hasCode)) {
                 singleLayout = false;
-                cutIntoRanges(text, textRanges);
+                if (captionRanges == null) {
+                    cutIntoRanges(text, textRanges);
+                }
             } else if (singleLayout || blocksCount == 1) {
                 textRanges.add(new TextRange(0, textLayout.getText().length()));
             } else {
