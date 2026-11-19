@@ -4222,12 +4222,16 @@ public class MediaDataController extends BaseController {
 
 
     public void loadMedia(long dialogId, int count, int max_id, int min_id, int type, long topicId, int fromCache, int classGuid, int requestIndex, ReactionsLayoutInBubble.VisibleReaction tag, String query) {
+        loadMedia(dialogId, count, max_id, min_id, type, topicId, fromCache, classGuid, requestIndex, tag, query, null);
+    }
+
+    public void loadMedia(long dialogId, int count, int max_id, int min_id, int type, long topicId, int fromCache, int classGuid, int requestIndex, ReactionsLayoutInBubble.VisibleReaction tag, String query, Utilities.Callback3<ArrayList<MessageObject>, TLRPC.messages_Messages, Boolean> onLoaded) {
         boolean isChannel = DialogObject.isChatDialog(dialogId) && ChatObject.isChannel(-dialogId, currentAccount);
 
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("load media did " + dialogId + " count = " + count + " max_id " + max_id + " type = " + type + " cache = " + fromCache + " classGuid = " + classGuid);
         }
-        if (fromCache != 0 && TextUtils.isEmpty(query) || DialogObject.isEncryptedDialog(dialogId)) {
+        if (onLoaded == null && fromCache != 0 && TextUtils.isEmpty(query) || DialogObject.isEncryptedDialog(dialogId)) {
             loadMediaDatabase(dialogId, count, max_id, min_id, type, topicId, tag, classGuid, isChannel, fromCache, requestIndex);
         } else {
             TLRPC.TL_messages_search req = new TLRPC.TL_messages_search();
@@ -4278,20 +4282,27 @@ public class MediaDataController extends BaseController {
                 }
             }
             if (req.peer == null) {
+                if (onLoaded != null) {
+                    AndroidUtilities.runOnUIThread(() -> onLoaded.run(null, null, false));
+                }
                 return;
             }
             int reqId = getConnectionsManager().sendRequest(req, (response, error) -> {
                 if (error == null) {
                     TLRPC.messages_Messages res = (TLRPC.messages_Messages) response;
-                    getMessagesController().removeDeletedMessagesFromArray(dialogId, res.messages);
+                    if (onLoaded == null) {
+                        getMessagesController().removeDeletedMessagesFromArray(dialogId, res.messages);
+                    }
                     boolean topReached;
                     if (min_id != 0) {
-                        topReached = res.messages.size() <= 1;
+                        topReached = onLoaded == null ? res.messages.size() <= 1 : res.messages.stream().noneMatch(message -> message.id > min_id);
                     } else {
                         topReached = res.messages.size() == 0;
                     }
 
-                    processLoadedMedia(res, dialogId, count, max_id, min_id, type, topicId, 0, classGuid, isChannel, topReached, requestIndex);
+                    processLoadedMedia(res, dialogId, count, max_id, min_id, type, topicId, 0, classGuid, isChannel, topReached, requestIndex, onLoaded);
+                } else if (onLoaded != null) {
+                    AndroidUtilities.runOnUIThread(() -> onLoaded.run(null, null, false));
                 }
             });
             getConnectionsManager().bindRequestToGuid(reqId, classGuid);
@@ -4545,6 +4556,10 @@ public class MediaDataController extends BaseController {
     }
 
     private void processLoadedMedia(TLRPC.messages_Messages res, long dialogId, int count, int max_id, int min_id, int type, long topicId, int fromCache, int classGuid, boolean isChannel, boolean topReached, int requestIndex) {
+        processLoadedMedia(res, dialogId, count, max_id, min_id, type, topicId, fromCache, classGuid, isChannel, topReached, requestIndex, null);
+    }
+
+    private void processLoadedMedia(TLRPC.messages_Messages res, long dialogId, int count, int max_id, int min_id, int type, long topicId, int fromCache, int classGuid, boolean isChannel, boolean topReached, int requestIndex, Utilities.Callback3<ArrayList<MessageObject>, TLRPC.messages_Messages, Boolean> onLoaded) {
         if (BuildVars.LOGS_ENABLED) {
             int messagesCount = 0;
             if (res != null && res.messages != null) {
@@ -4558,10 +4573,15 @@ public class MediaDataController extends BaseController {
             }
             loadMedia(dialogId, count, max_id, min_id, type, topicId, 0, classGuid, requestIndex, null, null);
         } else {
+            // Keep the raw page for callers that need cursors and server search positions.
+            ArrayList<TLRPC.Message> mediaMessages = onLoaded == null ? res.messages : new ArrayList<>(res.messages);
+            if (onLoaded != null) {
+                getMessagesController().removeDeletedMessagesFromArray(dialogId, mediaMessages);
+            }
             if (fromCache == 0) {
-                ImageLoader.saveMessagesThumbs(res.messages);
+                ImageLoader.saveMessagesThumbs(mediaMessages);
                 getMessagesStorage().putUsersAndChats(res.users, res.chats, true, true);
-                putMediaDatabase(dialogId, topicId, type, res.messages, max_id, min_id, topReached);
+                putMediaDatabase(dialogId, topicId, type, mediaMessages, max_id, min_id, topReached);
             }
 
             Utilities.searchQueue.postRunnable(() -> {
@@ -4571,8 +4591,8 @@ public class MediaDataController extends BaseController {
                     usersDict.put(u.id, u);
                 }
                 ArrayList<MessageObject> objects = new ArrayList<>();
-                for (int a = 0; a < res.messages.size(); a++) {
-                    TLRPC.Message message = res.messages.get(a);
+                for (int a = 0; a < mediaMessages.size(); a++) {
+                    TLRPC.Message message = mediaMessages.get(a);
                     MessageObject messageObject = new MessageObject(currentAccount, message, usersDict, true, false);
                     messageObject.createStrippedThumb();
                     objects.add(messageObject);
@@ -4584,7 +4604,11 @@ public class MediaDataController extends BaseController {
                         int totalCount = res.count;
                         getMessagesController().putUsers(res.users, fromCache != 0);
                         getMessagesController().putChats(res.chats, fromCache != 0);
-                        getNotificationCenter().postNotificationName(NotificationCenter.mediaDidLoad, dialogId, totalCount, objects, classGuid, type, topReached, min_id != 0, requestIndex);
+                        if (onLoaded != null) {
+                            onLoaded.run(objects, res, topReached);
+                        } else {
+                            getNotificationCenter().postNotificationName(NotificationCenter.mediaDidLoad, dialogId, totalCount, objects, classGuid, type, topReached, min_id != 0, requestIndex);
+                        }
                     });
                 };
 
