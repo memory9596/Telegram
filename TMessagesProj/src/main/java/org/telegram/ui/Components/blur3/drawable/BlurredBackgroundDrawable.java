@@ -17,8 +17,10 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.RenderNode;
 import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.NinePatchDrawable;
 import android.os.Build;
+import android.util.LruCache;
 import android.view.View;
 import android.view.ViewOutlineProvider;
 
@@ -28,6 +30,7 @@ import androidx.annotation.RequiresApi;
 import androidx.core.graphics.ColorUtils;
 import androidx.core.math.MathUtils;
 
+import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.utils.RadiiUtils;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.blur3.Blur3HashImpl;
@@ -48,7 +51,9 @@ import org.telegram.utils.glass.source.GlassSourceRenderNode;
 import org.telegram.utils.glass.source.GlassSourceWrapped;
 
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * The glass: a rounded rect of a {@link GlassSource} under a tint, with a shadow and a {@link GlassRim}.
@@ -68,6 +73,7 @@ import java.util.Arrays;
  * The rim is always a nine-patch over the result ({@link GlassRimRenderer}).
  */
 public class BlurredBackgroundDrawable extends GlassDrawable implements Theme.Colorable {
+    private static final LruCache<List<Integer>, Drawable.ConstantState> ninePatchCache = new LruCache<>(16);
     private final GlassSource glassSource;
     private final GlassSource frostedSource;
     private final GlassSource staticSource;
@@ -982,7 +988,6 @@ public class BlurredBackgroundDrawable extends GlassDrawable implements Theme.Co
         private final Rect ninePatchPadding = new Rect();
         private NinePatchDrawable ninePatch;
         private long ninePatchHash;
-        private final Bitmap[] ninePatchRef = new Bitmap[1];
 
         @Override
         void draw(Canvas canvas, GlassSource source) {
@@ -1031,21 +1036,43 @@ public class BlurredBackgroundDrawable extends GlassDrawable implements Theme.Co
             hashBuilder.addF(shadowLayerRadius);
             hashBuilder.addF(shadowLayerDx);
             hashBuilder.addF(shadowLayerDy);
+            hashBuilder.add(ApplicationLoader.applicationContext.getResources().getDisplayMetrics().densityDpi);
             final long hash = hashBuilder.get();
 
             if (ninePatch == null || ninePatchHash != hash) {
                 ninePatchHash = hash;
-                final int colorHint = Color.alpha(fillColor) == 255 ? fillColor : NinePatchBuilder.NO_COLOR;
-                ninePatch = NinePatchBuilder.createNinePatch(
-                    ninePatchRef,
-                    fillColor,
-                    boundProps.radii,
-                    shadowLayerRadius,
-                    shadowColor,
-                    shadowLayerDx,
-                    shadowLayerDy,
-                    colorHint
-                );
+                final List<Integer> key = new ArrayList<>(14);
+                key.add(fillColor);
+                key.add(shadowColor);
+                for (float radius : boundProps.radii) {
+                    key.add(Float.floatToIntBits(radius));
+                }
+                key.add(Float.floatToIntBits(shadowLayerRadius));
+                key.add(Float.floatToIntBits(shadowLayerDx));
+                key.add(Float.floatToIntBits(shadowLayerDy));
+                key.add(ApplicationLoader.applicationContext.getResources().getDisplayMetrics().densityDpi);
+                Drawable.ConstantState state = ninePatchCache.get(key);
+                if (state == null) {
+                    // Cached pixels must never be overwritten by another shape's bitmap reuse.
+                    final Bitmap[] bitmapRef = new Bitmap[1];
+                    ninePatch = NinePatchBuilder.createNinePatch(
+                        bitmapRef,
+                        fillColor,
+                        boundProps.radii,
+                        shadowLayerRadius,
+                        shadowColor,
+                        shadowLayerDx,
+                        shadowLayerDy,
+                        Color.alpha(fillColor) == 255 ? fillColor : NinePatchBuilder.NO_COLOR
+                    );
+                    state = ninePatch.getConstantState();
+                    if (state != null && bitmapRef[0].getAllocationByteCount() <= 256 * 1024) {
+                        ninePatchCache.put(key, state);
+                    }
+                }
+                if (state != null) {
+                    ninePatch = (NinePatchDrawable) state.newDrawable(ApplicationLoader.applicationContext.getResources()).mutate();
+                }
                 ninePatch.getPadding(ninePatchPadding);
             }
             return ninePatch;
