@@ -1,0 +1,347 @@
+diff --git a/libraries/extractor/src/main/java/androidx/media3/extractor/mp4/FragmentedMp4Extractor.java b/libraries/extractor/src/main/java/androidx/media3/extractor/mp4/FragmentedMp4Extractor.java
+--- a/libraries/extractor/src/main/java/androidx/media3/extractor/mp4/FragmentedMp4Extractor.java
++++ b/libraries/extractor/src/main/java/androidx/media3/extractor/mp4/FragmentedMp4Extractor.java
+@@ -54,8 +54,10 @@
+ import androidx.media3.extractor.ExtractorOutput;
+ import androidx.media3.extractor.ExtractorsFactory;
+ import androidx.media3.extractor.GaplessInfoHolder;
++import androidx.media3.extractor.IndexSeekMap;
+ import androidx.media3.extractor.PositionHolder;
+ import androidx.media3.extractor.SeekMap;
++import androidx.media3.extractor.SeekPoint;
+ import androidx.media3.extractor.SniffFailure;
+ import androidx.media3.extractor.TrackOutput;
+ import androidx.media3.extractor.metadata.emsg.EventMessage;
+@@ -94,7 +96,8 @@
+    * #FLAG_WORKAROUND_EVERY_VIDEO_FRAME_IS_SYNC_FRAME}, {@link #FLAG_WORKAROUND_IGNORE_TFDT_BOX},
+    * {@link #FLAG_ENABLE_EMSG_TRACK}, {@link #FLAG_WORKAROUND_IGNORE_EDIT_LISTS}, {@link
+    * #FLAG_EMIT_RAW_SUBTITLE_DATA}, {@link #FLAG_READ_WITHIN_GOP_SAMPLE_DEPENDENCIES}, {@link
+-   * #FLAG_READ_WITHIN_GOP_SAMPLE_DEPENDENCIES_H265} and {@link #FLAG_MERGE_FRAGMENTED_SIDX}.
++   * #FLAG_READ_WITHIN_GOP_SAMPLE_DEPENDENCIES_H265}, {@link #FLAG_MERGE_FRAGMENTED_SIDX} and
++   * {@link #FLAG_ENABLE_INDEX_SEEKING}.
+    */
+   @Documented
+   @Retention(RetentionPolicy.SOURCE)
+@@ -109,7 +112,8 @@
+         FLAG_EMIT_RAW_SUBTITLE_DATA,
+         FLAG_READ_WITHIN_GOP_SAMPLE_DEPENDENCIES,
+         FLAG_READ_WITHIN_GOP_SAMPLE_DEPENDENCIES_H265,
+-        FLAG_MERGE_FRAGMENTED_SIDX
++        FLAG_MERGE_FRAGMENTED_SIDX,
++        FLAG_ENABLE_INDEX_SEEKING
+       })
+   public @interface Flags {}
+ 
+@@ -165,6 +169,9 @@
+   /** Flag to enable reading and merging of all sidx boxes before continuing extraction. */
+   public static final int FLAG_MERGE_FRAGMENTED_SIDX = 1 << 8;
+ 
++  /** Flag to build a seek index for finite fragmented MP4 inputs without a sidx box. */
++  public static final int FLAG_ENABLE_INDEX_SEEKING = 1 << 9;
++
+   /**
+    * @deprecated Use {@link #newFactory(SubtitleParser.Factory)} instead.
+    */
+@@ -259,6 +266,14 @@
+   private boolean upfrontSidxScanComplete;
+ 
+   private long seekPositionBeforeSidxProcessing;
++
++  @Nullable private IndexSeekMap fragmentIndexSeekMap;
++  @Nullable private TrackBundle fragmentIndexTrackBundle;
++  @Nullable private SeekMap pendingIndexSeekMap;
++  private long firstFragmentPosition;
++  private boolean isBuildingFragmentIndex;
++  private boolean fragmentIndexComplete;
++  private boolean fragmentIndexUsesTfdt;
+ 
+   /**
+    * @deprecated Use {@link #FragmentedMp4Extractor(SubtitleParser.Factory)} instead
+@@ -521,6 +536,11 @@
+     pendingMetadataSampleBytes = 0;
+     reorderingBufferQueue.clear();
+     pendingSeekTimeUs = timeUs;
++    isBuildingFragmentIndex =
++        fragmentIndexSeekMap != null
++            && !fragmentIndexComplete
++            && (durationUs == C.TIME_UNSET
++                || fragmentIndexUsesTfdt && !fragmentIndexSeekMap.isTimeUsInIndex(timeUs, 1));
+     containerAtoms.clear();
+     enterReadingAtomHeaderState();
+   }
+@@ -533,6 +553,24 @@
+   @Override
+   public int read(ExtractorInput input, PositionHolder seekPosition) throws IOException {
+     while (true) {
++      if (pendingIndexSeekMap != null
++          || isBuildingFragmentIndex
++              && (fragmentIndexComplete
++                  || durationUs != C.TIME_UNSET
++                      && pendingSeekTimeUs != C.TIME_UNSET
++                      && (!fragmentIndexUsesTfdt
++                          || checkNotNull(fragmentIndexSeekMap)
++                              .isTimeUsInIndex(pendingSeekTimeUs, 1)))) {
++        SeekMap seekMap =
++            pendingIndexSeekMap != null
++                ? pendingIndexSeekMap
++                : checkNotNull(fragmentIndexSeekMap);
++        long timeUs = pendingSeekTimeUs == C.TIME_UNSET ? 0 : pendingSeekTimeUs;
++        seekPosition.position = seekMap.getSeekPoints(timeUs).first.position;
++        pendingIndexSeekMap = null;
++        seek(seekPosition.position, timeUs);
++        return RESULT_SEEK;
++      }
+       switch (parserState) {
+         case STATE_READING_ATOM_HEADER:
+           if (!readAtomHeader(input)) {
+@@ -543,15 +581,36 @@
+               upfrontSidxScanComplete = true;
+               return Extractor.RESULT_SEEK;
+             } else {
++              if (fragmentIndexSeekMap != null) {
++                fragmentIndexComplete = true;
++                if (durationUs == C.TIME_UNSET) {
++                  durationUs = fragmentIndexSeekMap.getDurationUs();
++                  outputFragmentIndexSeekMap();
++                }
++                if (isBuildingFragmentIndex) {
++                  continue;
++                }
++              }
+               reorderingBufferQueue.flush();
+               return Extractor.RESULT_END_OF_INPUT;
+             }
+           }
+           break;
+         case STATE_READING_ATOM_PAYLOAD:
++          if (isBuildingFragmentIndex && atomData == null && containerAtoms.isEmpty()) {
++            seekPosition.position =
++                Math.min(input.getLength(), input.getPosition() + atomSize - atomHeaderBytesRead);
++            enterReadingAtomHeaderState();
++            return RESULT_SEEK;
++          }
+           readAtomPayload(input);
+           break;
+         case STATE_READING_ENCRYPTION_DATA:
++          if (isBuildingFragmentIndex) {
++            seekPosition.position = Math.min(input.getLength(), endOfMdatPosition);
++            enterReadingAtomHeaderState();
++            return RESULT_SEEK;
++          }
+           readEncryptionData(input);
+           break;
+         default:
+@@ -629,7 +688,39 @@
+     if (atomType == Mp4Box.TYPE_moof || atomType == Mp4Box.TYPE_mdat) {
+       if (!haveOutputSeekMap) {
+         // This must be the first moof or mdat in the stream.
+-        extractorOutput.seekMap(new SeekMap.Unseekable(durationUs, atomPosition));
++        if (atomType == Mp4Box.TYPE_moof
++            && (flags & FLAG_ENABLE_INDEX_SEEKING) != 0
++            && input.getLength() != C.LENGTH_UNSET
++            && sideloadedTrack == null) {
++          boolean hasMoovSamples = false;
++          for (int i = 0; i < trackBundles.size(); i++) {
++            TrackBundle bundle = trackBundles.valueAt(i);
++            hasMoovSamples |= bundle.moovSampleTable.sampleCount != 0;
++            int type = bundle.moovSampleTable.track.type;
++            if ((type == C.TRACK_TYPE_VIDEO || type == C.TRACK_TYPE_AUDIO)
++                && (fragmentIndexTrackBundle == null
++                    || type == C.TRACK_TYPE_VIDEO
++                        && fragmentIndexTrackBundle.moovSampleTable.track.type
++                            != C.TRACK_TYPE_VIDEO)) {
++              fragmentIndexTrackBundle = bundle;
++            }
++          }
++          if (!hasMoovSamples && fragmentIndexTrackBundle != null) {
++            if (durationUs == 0) {
++              durationUs = C.TIME_UNSET;
++            }
++            firstFragmentPosition = atomPosition;
++            fragmentIndexSeekMap =
++                new IndexSeekMap(new long[] {atomPosition}, new long[] {0}, durationUs);
++            fragmentIndexUsesTfdt = true;
++            isBuildingFragmentIndex = durationUs == C.TIME_UNSET;
++          }
++        }
++        if (fragmentIndexSeekMap != null) {
++          outputFragmentIndexSeekMap();
++        } else {
++          extractorOutput.seekMap(new SeekMap.Unseekable(durationUs, atomPosition));
++        }
+         haveOutputSeekMap = true;
+       }
+     }
+@@ -724,8 +815,16 @@
+       chunkIndexMerger.add(result.second);
+       segmentIndexEarliestPresentationTimeUs = result.first;
+       if (!upfrontSidxScanComplete) {
+-        extractorOutput.seekMap(
+-            chunkIndexMerger.size() == 1 ? result.second : chunkIndexMerger.merge());
++        SeekMap seekMap = chunkIndexMerger.size() == 1 ? result.second : chunkIndexMerger.merge();
++        if (fragmentIndexSeekMap != null) {
++          if (isBuildingFragmentIndex) {
++            pendingIndexSeekMap = seekMap;
++          }
++          fragmentIndexSeekMap = null;
++          fragmentIndexTrackBundle = null;
++          isBuildingFragmentIndex = false;
++        }
++        extractorOutput.seekMap(seekMap);
+         haveOutputSeekMap = true;
+       }
+       if ((flags & FLAG_MERGE_FRAGMENTED_SIDX) != 0
+@@ -854,6 +953,9 @@
+ 
+   private void onMoofContainerAtomRead(ContainerBox moof) throws ParserException {
+     parseMoof(moof, trackBundles, sideloadedTrack != null, flags, scratchBytes);
++    if (fragmentIndexSeekMap != null) {
++      updateFragmentIndex();
++    }
+ 
+     @Nullable DrmInitData drmInitData = getDrmInitDataFromAtoms(moof.leafChildren);
+     if (drmInitData != null) {
+@@ -863,13 +965,94 @@
+       }
+     }
+     // If we have a pending seek, advance tracks to their preceding sync frames.
+-    if (pendingSeekTimeUs != C.TIME_UNSET) {
++    if (!isBuildingFragmentIndex && pendingSeekTimeUs != C.TIME_UNSET) {
+       int trackCount = trackBundles.size();
++      boolean haveTrackFragments = true;
+       for (int i = 0; i < trackCount; i++) {
+-        trackBundles.valueAt(i).seek(pendingSeekTimeUs);
+-      }
+-      pendingSeekTimeUs = C.TIME_UNSET;
+-    }
++        TrackBundle bundle = trackBundles.valueAt(i);
++        bundle.seek(pendingSeekTimeUs);
++        int type = bundle.moovSampleTable.track.type;
++        if ((type == C.TRACK_TYPE_AUDIO || type == C.TRACK_TYPE_VIDEO)
++            && bundle.fragmentIndexPosition == C.INDEX_UNSET) {
++          haveTrackFragments = false;
++        }
++      }
++      if (fragmentIndexSeekMap == null || haveTrackFragments) {
++        pendingSeekTimeUs = C.TIME_UNSET;
++      }
++    }
++  }
++
++  private void updateFragmentIndex() {
++    IndexSeekMap seekMap = checkNotNull(fragmentIndexSeekMap);
++    long position = Long.MAX_VALUE;
++    for (int i = 0; i < trackBundles.size(); i++) {
++      TrackBundle bundle = trackBundles.valueAt(i);
++      int type = bundle.moovSampleTable.track.type;
++      if (type != C.TRACK_TYPE_AUDIO && type != C.TRACK_TYPE_VIDEO) {
++        continue;
++      }
++      position =
++          Math.min(
++              position,
++              bundle.fragmentIndexPosition == C.INDEX_UNSET
++                  ? firstFragmentPosition
++                  : bundle.fragmentIndexPosition);
++      if (durationUs == C.TIME_UNSET) {
++        seekMap.setDurationUs(max(seekMap.getDurationUs(), bundle.fragmentEndTimeUs));
++      }
++      if (fragmentIndexUsesTfdt
++          && bundle.fragmentIndexPosition != C.INDEX_UNSET
++          && !bundle.fragmentHasTfdt) {
++        // Without independent decode times, seeking must retain the preceding fragments.
++        fragmentIndexUsesTfdt = false;
++        fragmentIndexSeekMap =
++            seekMap =
++                new IndexSeekMap(
++                    new long[] {firstFragmentPosition}, new long[] {0}, seekMap.getDurationUs());
++        outputFragmentIndexSeekMap();
++      }
++    }
++    if (!fragmentIndexUsesTfdt || fragmentIndexComplete) {
++      return;
++    }
++    TrackFragment fragment = checkNotNull(fragmentIndexTrackBundle).fragment;
++    for (int i = 0; i < fragment.sampleCount; i++) {
++      if (fragment.sampleIsSyncFrameTable[i]) {
++        long timeUs = fragment.getSamplePresentationTimeUs(i);
++        if (!seekMap.isTimeUsInIndex(timeUs, 1)) {
++          seekMap.addSeekPoint(timeUs, position);
++        }
++      }
++    }
++  }
++
++  private void outputFragmentIndexSeekMap() {
++    IndexSeekMap index = checkNotNull(fragmentIndexSeekMap);
++    extractorOutput.seekMap(
++        new SeekMap() {
++          @Override
++          public boolean isSeekable() {
++            return index.isSeekable();
++          }
++
++          @Override
++          public long getDurationUs() {
++            return index.getDurationUs();
++          }
++
++          @Override
++          public SeekPoints getSeekPoints(long timeUs) {
++            SeekPoints points = index.getSeekPoints(timeUs);
++            if (!fragmentIndexUsesTfdt
++                || !fragmentIndexComplete && !index.isTimeUsInIndex(timeUs, 1)) {
++              // Keep closest-sync seeks at their requested time until the index reaches it.
++              long position = fragmentIndexUsesTfdt ? points.first.position : firstFragmentPosition;
++              return new SeekPoints(new SeekPoint(timeUs, position));
++            }
++            return points;
++          }
++        });
+   }
+ 
+   private void initExtraTracks() {
+@@ -1051,6 +1234,9 @@
+     trackBundle.resetFragmentInfo();
+     trackBundle.currentlyInFragment = true;
+     @Nullable LeafBox tfdtAtom = traf.getLeafBoxOfType(Mp4Box.TYPE_tfdt);
++    trackBundle.fragmentIndexPosition = fragment.atomPosition;
++    trackBundle.fragmentHasTfdt =
++        tfdtAtom != null && (flags & FLAG_WORKAROUND_IGNORE_TFDT_BOX) == 0;
+     if (tfdtAtom != null && (flags & FLAG_WORKAROUND_IGNORE_TFDT_BOX) == 0) {
+       fragment.nextFragmentDecodeTime = parseTfdt(tfdtAtom.data);
+       fragment.nextFragmentDecodeTimeIncludesMoov = true;
+@@ -1374,6 +1560,13 @@
+       sampleSizeTable[i] = sampleSize;
+       sampleIsSyncFrameTable[i] =
+           ((sampleFlags >> 16) & 0x1) == 0 && (!workaroundEveryVideoFrameIsSyncFrame || i == 0);
++      if ((flags & FLAG_ENABLE_INDEX_SEEKING) != 0) {
++        trackBundle.fragmentEndTimeUs =
++            max(
++                trackBundle.fragmentEndTimeUs,
++                samplePresentationTimesUs[i]
++                    + Util.scaleLargeTimestamp(sampleDuration, C.MICROS_PER_SECOND, timescale));
++      }
+       cumulativeTime += sampleDuration;
+     }
+     fragment.nextFragmentDecodeTime = cumulativeTime;
+@@ -2001,6 +2194,9 @@
+     public int currentSampleInTrackRun;
+     public int currentTrackRunIndex;
+     public int firstSampleToOutputIndex;
++    public long fragmentIndexPosition;
++    public boolean fragmentHasTfdt;
++    public long fragmentEndTimeUs;
+ 
+     private final Format baseFormat;
+     private final ParsableByteArray encryptionSignalByte;
+@@ -2050,6 +2246,9 @@
+       currentSampleInTrackRun = 0;
+       firstSampleToOutputIndex = 0;
+       currentlyInFragment = false;
++      fragmentIndexPosition = C.INDEX_UNSET;
++      fragmentHasTfdt = false;
++      fragmentEndTimeUs = 0;
+     }
+ 
+     /**
