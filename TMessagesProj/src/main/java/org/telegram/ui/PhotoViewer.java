@@ -18508,6 +18508,13 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
                 for (int i = 0; i < animatingImageViews.length; i++) {
                     animatingImageViews[i].setAnimationValues(animationValues, false, object == null ? false : object.fadeIn);
+                    animatingImageViews[i].setAlpha(1.0f);
+                    animatingImageViews[i].setClipHorizontal(0);
+                    animatingImageViews[i].setClipTop(0);
+                    animatingImageViews[i].setClipBottom(0);
+                    animatingImageViews[i].setImageX(0);
+                    animatingImageViews[i].setImageY(0);
+                    animatingImageViews[i].setRadius(null);
                     animatingImageViews[i].setVisibility(View.VISIBLE);
                 }
 
@@ -18628,6 +18635,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
                     ArrayList<Animator> animators = new ArrayList<>((sendPhotoType == SELECT_TYPE_AVATAR ? 3 : 2) + animatingImageViews.length + (animatingImageViews.length > 1 ? 1 : 0));
                     for (int i = 0; i < animatingImageViews.length; i++) {
+                        animatingImageViews[i].setAnimationProgress(0);
                         ObjectAnimator animator = ObjectAnimator.ofFloat(animatingImageViews[i], AnimationProperties.CLIPPING_IMAGE_VIEW_PROGRESS, 0.0f, 1.0f);
                         if (i == 0) {
                             animator.addUpdateListener(animation -> {
@@ -18936,11 +18944,13 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         leftBlur.destroy();
         rightImage.setImageBitmap((Bitmap) null);
         rightBlur.destroy();
+        animatingImageView.setVisibility(View.GONE);
+        animatingImageView.setImageBitmap(null);
+        if (object != null && !AndroidUtilities.isTablet() && object.animatingImageView != null) {
+            object.animatingImageView.setVisibility(View.GONE);
+            object.animatingImageView.setImageBitmap(null);
+        }
         containerView.post(() -> {
-            animatingImageView.setImageBitmap(null);
-            if (object != null && !AndroidUtilities.isTablet() && object.animatingImageView != null) {
-                object.animatingImageView.setImageBitmap(null);
-            }
             try {
                 if (windowView.getParent() != null) {
                     WindowManager wm = (WindowManager) parentActivity.getSystemService(Context.WINDOW_SERVICE);
