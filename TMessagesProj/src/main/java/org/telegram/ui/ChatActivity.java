@@ -1678,7 +1678,7 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public PhotoViewer.PlaceProviderObject getPlaceForPhoto(MessageObject messageObject, TLRPC.FileLocation fileLocation, int index, boolean needPreview, boolean closing) {
-            return ChatActivity.this.getPlaceForPhoto(messageObject, fileLocation, index, needPreview, false);
+            return ChatActivity.this.getPlaceForPhoto(messageObject, fileLocation, index, needPreview, closing);
         }
 
         @Override
@@ -1703,7 +1703,7 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public PhotoViewer.PlaceProviderObject getPlaceForPhoto(MessageObject messageObject, TLRPC.FileLocation fileLocation, int index, boolean needPreview, boolean closing) {
-            return ChatActivity.this.getPlaceForPhoto(messageObject, fileLocation, index, needPreview, false);
+            return ChatActivity.this.getPlaceForPhoto(messageObject, fileLocation, index, needPreview, closing);
         }
 
         @Override
@@ -21252,7 +21252,11 @@ public class ChatActivity extends BaseFragment implements
             }
 
             if (imageReceiver != null) {
-                if (onlyIfVisible && view.getY() + imageReceiver.getImageY2() < chatListViewPaddingTop - AndroidUtilities.dp(4)) {
+                if (onlyIfVisible && (imageReceiver.getDrawRegion().isEmpty()
+                        || view.getY() + imageReceiver.getImageY2() <= chatListViewPaddingTop - chatListViewPaddingVisibleOffset - dp(4)
+                        || view.getY() + imageReceiver.getImageY() >= chatListView.getHeight() - blurredViewBottomOffset
+                            - dp(9) - windowInsetsStateHolder.getAnimatedMaxBottomInset()
+                            - getTopicTabsSideSize(TopicsTabsView.Position.BOTTOM) - inputIslandHeightCurrent)) {
                     return null;
                 }
                 int[] coords = new int[2];
