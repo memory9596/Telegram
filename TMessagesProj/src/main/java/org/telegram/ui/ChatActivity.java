@@ -1002,6 +1002,7 @@ public class ChatActivity extends BaseFragment implements
 
     private boolean first = true;
     private int first_unread_id;
+    private int currentUnreadBatchStartId;
     private boolean loadingForward;
     private MessageObject unreadMessageObject;
     private MessageObject scrollToMessage;
@@ -11278,6 +11279,9 @@ public class ChatActivity extends BaseFragment implements
     private boolean forceScrollToMessageBottom;
 
     public void onPageDownClicked() {
+        if (chatListView.isFastScrollAnimationRunning()) {
+            return;
+        }
         wasManualScroll = true;
         textSelectionHelper.cancelTextSelectionRunnable();
         final Runnable inCaseLoading = () -> {
@@ -11288,18 +11292,48 @@ public class ChatActivity extends BaseFragment implements
             scrollToMessageId(top[0], 0, true, top[1], true, 0, null, inCaseLoading);
             return;
         }
-        if (createUnreadMessageAfterId != 0) {
-            scrollToMessageId(createUnreadMessageAfterId, 0, false, returnToLoadIndex, true, 0, null, inCaseLoading);
-        } else if (returnToMessageId > 0) {
+        if (returnToMessageId > 0) {
             scrollToMessageId(returnToMessageId, 0, true, returnToLoadIndex, true, 0, null, inCaseLoading);
-        } else {
-            scrollToLastMessage(true, !forceScrollToMessageBottom, inCaseLoading);
-            forceScrollToMessageBottom = false;
-            if (!pinnedMessageIds.isEmpty()) {
-                forceScrollToFirst = true;
-                forceNextPinnedMessageId = pinnedMessageIds.get(0);
+            return;
+        }
+        if (newUnreadMessageCount > 0) {
+            MessageObject unreadTarget = findCurrentUnreadMessageTarget();
+            int unreadTargetId = unreadTarget != null ? unreadTarget.getId() : currentUnreadBatchStartId;
+            if (unreadTargetId != 0) {
+                scrollToMessageId(unreadTargetId, 0, false, 0, true, 0, null, inCaseLoading);
+            }
+            return;
+        }
+        // With no active unread target, a normal short press does nothing; long press owns jump-to-latest.
+    }
+
+    private MessageObject findCurrentUnreadMessageTarget() {
+        if (currentUnreadBatchStartId == 0 && first_unread_id != 0) {
+            currentUnreadBatchStartId = first_unread_id;
+        }
+        MessageObject trackedTarget = currentUnreadBatchStartId != 0 ? messagesDict[0].get(currentUnreadBatchStartId) : null;
+        if (trackedTarget != null && !trackedTarget.isOut() && trackedTarget.isUnread()) {
+            return trackedTarget;
+        }
+
+        MessageObject earliestUnread = null;
+        for (int i = 0; i < messages.size(); i++) {
+            MessageObject candidate = messages.get(i);
+            if (candidate == null || candidate.messageOwner == null || candidate.getId() == 0 || candidate.isOut() || !candidate.isUnread()) {
+                continue;
+            }
+            if (earliestUnread == null || candidate.messageOwner.date < earliestUnread.messageOwner.date
+                    || candidate.messageOwner.date == earliestUnread.messageOwner.date && candidate.getId() > 0 && (earliestUnread.getId() <= 0 || candidate.getId() < earliestUnread.getId())) {
+                earliestUnread = candidate;
             }
         }
+        if (earliestUnread != null) {
+            currentUnreadBatchStartId = earliestUnread.getId();
+        } else if (trackedTarget != null) {
+            // The tracked start was read; do not navigate back to it as if it were still unread.
+            currentUnreadBatchStartId = 0;
+        }
+        return earliestUnread;
     }
 
     public ActionBarMenuItem getHeaderItem() {
@@ -16747,6 +16781,7 @@ public class ChatActivity extends BaseFragment implements
         startLoadFromMessageId = 0;
         showScrollToMessageError = false;
         last_message_id = 0;
+        currentUnreadBatchStartId = 0;
         unreadMessageObject = null;
         createUnreadMessageAfterId = 0;
         createUnreadMessageAfterIdLoading = false;
@@ -17693,6 +17728,9 @@ public class ChatActivity extends BaseFragment implements
                         newUnreadMessageCount = 0;
                     }
                 }
+                if (newUnreadMessageCount == 0) {
+                    currentUnreadBatchStartId = 0;
+                }
                 if (inLayout) {
                     AndroidUtilities.runOnUIThread(this::inlineUpdate1);
                 } else {
@@ -17703,6 +17741,7 @@ public class ChatActivity extends BaseFragment implements
             } else if (!firstUnreadSent && currentEncryptedChat == null) {
                 if (chatLayoutManager.findFirstVisibleItemPosition() == 0) {
                     newUnreadMessageCount = 0;
+                    currentUnreadBatchStartId = 0;
                     if (inLayout) {
                         AndroidUtilities.runOnUIThread(this::inlineUpdate2);
                     } else {
@@ -18201,6 +18240,7 @@ public class ChatActivity extends BaseFragment implements
         } else {
             returnToMessageId = 0;
             newUnreadMessageCount = 0;
+            currentUnreadBatchStartId = 0;
             replyStack.clear();
         }
 
@@ -22134,6 +22174,9 @@ public class ChatActivity extends BaseFragment implements
             unread_to_load = threadUnreadMessagesCount;
             threadUnreadMessagesCount = 0;
         }
+        if (load_type == 2 && currentUnreadBatchStartId == 0) {
+            currentUnreadBatchStartId = first_unread_id;
+        }
         int newRowsCount = 0;
 
         if (load_type != 0 && (isThreadChat() && !isTopic && first_unread_id != 0 || startLoadFromMessageId != 0 || last_message_id != 0)) {
@@ -22352,6 +22395,9 @@ public class ChatActivity extends BaseFragment implements
                     newUnreadMessageCount--;
                     if (newUnreadMessageCount < 0) {
                         newUnreadMessageCount = 0;
+                    }
+                    if (newUnreadMessageCount == 0) {
+                        currentUnreadBatchStartId = 0;
                     }
                     if (replyOriginalChat != null) {
                         getMessagesStorage().updateRepliesMaxReadId(replyOriginalChat.id, replyOriginalMessageId, obj.getId(), newUnreadMessageCount, true);
@@ -23477,6 +23523,9 @@ public class ChatActivity extends BaseFragment implements
             if (updated) {
                 if (newUnreadMessageCount < 0) {
                     newUnreadMessageCount = 0;
+                }
+                if (newUnreadMessageCount == 0) {
+                    currentUnreadBatchStartId = 0;
                 }
                 if (sideControlsButtonsLayout != null) {
                     if (prevSetUnreadCount != newUnreadMessageCount) {
@@ -26986,6 +27035,9 @@ public class ChatActivity extends BaseFragment implements
                     }
                 }
                 if (!isAd) {
+                    if (currentUnreadBatchStartId == 0 && !obj.isOut() && obj.isUnread()) {
+                        currentUnreadBatchStartId = obj.getId();
+                    }
                     newUnreadMessageCount++;
                 }
                 if (obj.type == 10 || obj.type == MessageObject.TYPE_ACTION_PHOTO) {
@@ -27361,6 +27413,9 @@ public class ChatActivity extends BaseFragment implements
                     }
                 }
                 if (!isAd) {
+                    if (currentUnreadBatchStartId == 0 && !obj.isOut() && obj.isUnread()) {
+                        currentUnreadBatchStartId = obj.getId();
+                    }
                     newUnreadMessageCount++;
                 }
                 if (obj.type == 10 || obj.type == MessageObject.TYPE_ACTION_PHOTO) {
@@ -27416,6 +27471,7 @@ public class ChatActivity extends BaseFragment implements
                 if (!isAd) {
                     if (lastVisible == 0 && diff <= AndroidUtilities.dp(5) && !hasDraftsReplaces || hasFromMe) {
                         newUnreadMessageCount = 0;
+                        currentUnreadBatchStartId = 0;
                         if (!firstLoading && chatMode != MODE_SCHEDULED) {
                             if (paused) {
                                 scrollToTopOnResume = true;
@@ -48047,6 +48103,9 @@ public class ChatActivity extends BaseFragment implements
 
     private boolean onSideControlButtonOnLongClick(int buttonId, View view) {
         if (buttonId == ChatActivitySideControlsButtonsLayout.BUTTON_PAGE_DOWN) {
+            if (!replyStack.isEmpty() || returnToMessageId > 0) {
+                return true;
+            }
             replyStack.clear();
             returnToMessageId = 0;
             scrollToLastMessage(true, true, null);
