@@ -65,6 +65,10 @@ public class ChatActivityBlurredRoundPageDownButton extends FrameLayout {
         buttonView.showLoading(loading, animated);
     }
 
+    public void setIcon(@DrawableRes int resId) {
+        buttonView.setIcon(resId);
+    }
+
     @Override
     public void setEnabled(boolean enabled) {
         setEnabled(enabled, false);

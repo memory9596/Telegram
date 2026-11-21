@@ -18206,6 +18206,7 @@ public class ChatActivity extends BaseFragment implements
         returnToMessageId = fromMessageId;
         returnToLoadIndex = loadIndex;
         needSelectFromMessageId = select;
+        updatePagedownButtonIcon();
     }
 
     private void showPinnedProgress(boolean show) {
@@ -18227,6 +18228,12 @@ public class ChatActivity extends BaseFragment implements
         }
     }
 
+    private void updatePagedownButtonIcon() {
+        if (sideControlsButtonsLayout != null) {
+            sideControlsButtonsLayout.setPageDownReturnMode(!replyStack.isEmpty() || returnToMessageId > 0);
+        }
+    }
+
     private void updatePagedownButtonVisibility(boolean animated) {
         if (sideControlsButtonsLayout == null) {
             return;
@@ -18244,6 +18251,7 @@ public class ChatActivity extends BaseFragment implements
             replyStack.clear();
         }
 
+        updatePagedownButtonIcon();
         sideControlsButtonsLayout.showButton(ChatActivitySideControlsButtonsLayout.BUTTON_PAGE_DOWN, show, animated);
     }
 
@@ -18261,6 +18269,7 @@ public class ChatActivity extends BaseFragment implements
 
         if (!show) {
             returnToMessageId = 0;
+            updatePagedownButtonIcon();
         }
 
         contentView.invalidate();
@@ -18274,6 +18283,7 @@ public class ChatActivity extends BaseFragment implements
         sideControlsButtonsLayout.showButton(ChatActivitySideControlsButtonsLayout.BUTTON_MENTION, show && !ChatObject.isMonoForum(currentChat), animated);
         if (!show) {
             returnToMessageId = 0;
+            updatePagedownButtonIcon();
         }
     }
 
@@ -48042,6 +48052,7 @@ public class ChatActivity extends BaseFragment implements
 
     private void goToNextOrPrevSearchMessage(boolean searchUp) {
         replyStack.clear();
+        updatePagedownButtonIcon();
         if (chatMode == MODE_SEARCH) {
             HashtagSearchController.getInstance(currentAccount).jumpToMessage(classGuid, hashtagSearchSelectedIndex + (searchUp ? 1 : -1), searchType);
         } else {
@@ -48108,6 +48119,7 @@ public class ChatActivity extends BaseFragment implements
             }
             replyStack.clear();
             returnToMessageId = 0;
+            updatePagedownButtonIcon();
             scrollToLastMessage(true, true, null);
             return true;
         }
