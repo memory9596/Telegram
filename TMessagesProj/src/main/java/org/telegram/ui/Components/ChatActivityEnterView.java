@@ -7995,7 +7995,7 @@ public class ChatActivityEnterView extends FrameLayout implements
                     parentFragment.fallbackFieldPanel();
                 }
                 SendMessagesHelper.getInstance(currentAccount).sendMessage(params);
-                start = end + 1;
+                start = end;
             } while (end != text.length());
             return true;
         }
