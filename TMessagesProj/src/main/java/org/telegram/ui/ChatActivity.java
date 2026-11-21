@@ -11278,6 +11278,9 @@ public class ChatActivity extends BaseFragment implements
     private boolean forceScrollToMessageBottom;
 
     public void onPageDownClicked() {
+        if (chatListView.isFastScrollAnimationRunning()) {
+            return;
+        }
         wasManualScroll = true;
         textSelectionHelper.cancelTextSelectionRunnable();
         final Runnable inCaseLoading = () -> {
@@ -11288,10 +11291,34 @@ public class ChatActivity extends BaseFragment implements
             scrollToMessageId(top[0], 0, true, top[1], true, 0, null, inCaseLoading);
             return;
         }
-        if (createUnreadMessageAfterId != 0) {
-            scrollToMessageId(createUnreadMessageAfterId, 0, false, returnToLoadIndex, true, 0, null, inCaseLoading);
-        } else if (returnToMessageId > 0) {
+        if (returnToMessageId > 0) {
             scrollToMessageId(returnToMessageId, 0, true, returnToLoadIndex, true, 0, null, inCaseLoading);
+            return;
+        }
+        if (unreadMessageObject != null) {
+            int unreadPosition = chatAdapter.getMessages().indexOf(unreadMessageObject);
+            if (unreadPosition >= 0) {
+                unreadPosition += chatAdapter.messagesStartRow;
+                View unreadView = chatLayoutManager.findViewByPosition(unreadPosition);
+                int firstVisiblePosition = chatLayoutManager.findFirstVisibleItemPosition();
+                if (unreadView != null ? unreadView.getY() >= chatListView.getHeight() - chatListView.getPaddingBottom()
+                        : firstVisiblePosition != RecyclerView.NO_POSITION && (reversed ? unreadPosition > firstVisiblePosition : unreadPosition < firstVisiblePosition)) {
+                    chatScrollHelperCallback.scrollTo = unreadMessageObject;
+                    chatScrollHelperCallback.lastBottom = false;
+                    chatScrollHelperCallback.lastItemOffset = (int) chatListViewPaddingTop - chatListView.getPaddingTop();
+                    chatScrollHelperCallback.lastPadding = (int) chatListViewPaddingTop;
+                    chatScrollHelper.setScrollDirection(RecyclerAnimationScrollHelper.SCROLL_DIRECTION_DOWN);
+                    chatScrollHelper.scrollToPosition(chatScrollHelperCallback.position = unreadPosition,
+                        chatScrollHelperCallback.offset = chatScrollHelperCallback.lastItemOffset,
+                        chatScrollHelperCallback.bottom = false, true, true);
+                    canShowPagedownButton = true;
+                    updatePagedownButtonVisibility(true);
+                    return;
+                }
+            }
+        }
+        if (unreadMessageObject == null && createUnreadMessageAfterId != 0) {
+            scrollToMessageId(createUnreadMessageAfterId, 0, false, returnToLoadIndex, true, 0, null, inCaseLoading);
         } else {
             scrollToLastMessage(true, !forceScrollToMessageBottom, inCaseLoading);
             forceScrollToMessageBottom = false;
