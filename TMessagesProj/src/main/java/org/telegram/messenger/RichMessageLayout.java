@@ -1941,6 +1941,9 @@ public class RichMessageLayout {
         }
 
         if (act == MotionEvent.ACTION_DOWN) {
+            if (isPart && event.getY() >= Math.min(height, dp(PART_MAX_HEIGHT_DP))) {
+                return false;
+            }
             pressedBlock = null;
             final float ey = event.getY();
             int yAcc = 0;
