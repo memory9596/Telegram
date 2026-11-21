@@ -71,6 +71,8 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecUtil;
 import androidx.media3.exoplayer.source.LoopingMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
+import androidx.media3.extractor.DefaultExtractorsFactory;
+import androidx.media3.extractor.mp4.FragmentedMp4Extractor;
 import androidx.media3.exoplayer.source.chunk.MediaChunkIterator;
 import androidx.media3.common.TrackGroup;
 import androidx.media3.exoplayer.source.TrackGroupArray;
@@ -575,7 +577,10 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
                 return hlsMediaSourceFactory.createMediaSource(mediaItem);
             default:
                 if (progressiveMediaSourceFactory == null) {
-                    progressiveMediaSourceFactory = new ProgressiveMediaSource.Factory(this::createPlaybackDataSource);
+                    progressiveMediaSourceFactory = new ProgressiveMediaSource.Factory(
+                        this::createPlaybackDataSource,
+                        new DefaultExtractorsFactory().setFragmentedMp4ExtractorFlags(
+                            FragmentedMp4Extractor.FLAG_ENABLE_INDEX_SEEKING));
                 }
                 return progressiveMediaSourceFactory.createMediaSource(mediaItem);
         }
