@@ -193,6 +193,7 @@ import org.telegram.messenger.R;
 import org.telegram.messenger.SecureDocument;
 import org.telegram.messenger.SendMessagesHelper;
 import org.telegram.messenger.SharedConfig;
+import org.telegram.messenger.StatsController;
 import org.telegram.messenger.TranslateController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
@@ -907,6 +908,15 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private TextView doneButtonFullWidth;
     private ActionBarMenuItem menuItem;
     private ActionBarMenuItem videoItem;
+    private ActionBarMenuItem gifItem;
+    private LinearLayout gifQualityLayout;
+    private final ArrayList<VideoPlayer.Quality> gifQualities = new ArrayList<>();
+    private MessageObject gifQualityMessage;
+    private MessageObject gifAnimationMessage;
+    private TLRPC.Document gifAnimationDocument;
+    private TLRPC.Document gifQualityDocument;
+    private boolean gifAutoQualitySelected;
+    private long pendingGifSeek = -1;
     private ActionBarMenuSubItem allMediaItem;
     private ActionBarMenuSlider.SpeedSlider speedItem;
     private ActionBarMenuSubItem loopItem;
@@ -916,6 +926,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private ChooseQualityLayout.QualityIcon videoItemIcon;
     private LinearLayout videoQualityLayout;
     private final ArrayList<ActionBarMenuSubItem> videoQualityItems = new ArrayList<>();
+    private static final int PHOTO_QUALITY_AUTO = -1;
+    private int photoQuality = PHOTO_QUALITY_AUTO;
+    private boolean photoQualityItemsDisplayed;
+    private boolean openingWithMediaPreviewQuality;
+    private TLRPC.PhotoSize openingPhotoPreviewSize;
+    private int lastPhotoQualityNetworkType = -1;
     private ActionBarPopupWindow.GapView speedGap;
     private ActionBarMenu menu;
     private ActionBarMenuItem sendItem;
@@ -929,6 +945,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private ChooseDownloadQualityLayout chooseDownloadQualityLayout;
     private ChooseDownloadQualityLayout chooseShareQualityLayout;
     private ChooseDownloadQualityLayout chooseOpenQualityLayout;
+    private ChooseDownloadQualityLayout chooseGifDownloadQualityLayout;
+    private ChooseDownloadQualityLayout chooseGifShareQualityLayout;
+    private ChooseDownloadQualityLayout chooseGifOpenQualityLayout;
+    private int gifDownloadQualityForeground;
+    private int gifShareQualityForeground;
+    private int gifOpenQualityForeground;
     private ActionBarMenuSubItem videoShareItem, videoOpenItem;
     private TLRPC.Document playbackDownloadDocument;
     private int playbackDownloadAccount;
@@ -1056,7 +1078,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         @Override
         public void run() {
             if (videoPlayerControlVisible && isPlaying && !ApplicationLoader.mainInterfacePaused) {
-                if (menuItem != null && menuItem.isSubMenuShowing() || videoItem != null && videoItem.isSubMenuShowing()) {
+                if (menuItem != null && menuItem.isSubMenuShowing() || videoItem != null && videoItem.isSubMenuShowing()
+                        || gifItem != null && gifItem.isSubMenuShowing()) {
                     return;
                 }
                 if (captionScrollView != null && captionScrollView.getScrollY() != 0) {
@@ -2212,6 +2235,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private final static int gallery_menu_chromecast = 24;
     private final static int gallery_menu_create_sticker = 25;
     private final static int gallery_menu_delete2 = 26;
+    private final static int gallery_menu_gif_quality = 27;
 
     private final static int ads_sponsor_info = 101;
     private final static int ads_about = 102;
@@ -4172,12 +4196,29 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     @SuppressWarnings("unchecked")
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.didUpdateConnectionState
+                && (photoQuality == PHOTO_QUALITY_AUTO && hasPhotoQualityOptions(currentIndex)
+                || isManagedGif() && gifAutoQualitySelected && videoPlayer == null && !openingWithMediaPreviewQuality)) {
+            int networkType = ApplicationLoader.getAutodownloadNetworkType();
+            if (networkType != lastPhotoQualityNetworkType) {
+                lastPhotoQualityNetworkType = networkType;
+                if (isManagedGif()) applyGifQuality(null);
+                else applyPhotoQuality();
+            }
+            return;
+        }
         if (id == NotificationCenter.onDownloadingFilesChanged) {
             updateVideoDownloadControls();
             if (!viewerInBackground && !externalPlaybackTransition && !openingReadyShare) AndroidUtilities.runOnUIThread(this::openReadyVideoShare);
-            if (menuItem != null && menuItem.isSubMenuShowing() && isManagedVideo()) {
-                chooseDownloadQualityLayout.update(currentMessageObject, playbackDownloadDocument);
-                chooseShareQualityLayout.update(currentMessageObject, playbackDownloadDocument);
+            if (menuItem != null && menuItem.isSubMenuShowing() && (isManagedVideo() || isManagedGif())) {
+                if (isManagedGif()) {
+                    chooseGifDownloadQualityLayout.update(currentMessageObject, getCurrentQualityDocument());
+                    chooseGifShareQualityLayout.update(currentMessageObject, getCurrentQualityDocument());
+                    chooseGifOpenQualityLayout.update(currentMessageObject, getCurrentQualityDocument());
+                } else {
+                    chooseDownloadQualityLayout.update(currentMessageObject, playbackDownloadDocument);
+                    chooseShareQualityLayout.update(currentMessageObject, playbackDownloadDocument);
+                }
             }
             return;
         }
@@ -4650,11 +4691,146 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 && currentMessageObject.getDownloadDocument() != null;
     }
 
+    private boolean isManagedGif() {
+        return currentMessageObject != null && currentMessageObject.isGif() && !currentMessageObject.isSecretMedia()
+                && !currentMessageObject.shouldEncryptPhotoOrVideo() && currentMessageObject.getDocumentFast() != null;
+    }
+
+    private boolean hasManagedGifQualities() {
+        return isManagedGif() && currentMessageObject.hasVideoQualities();
+    }
+
+    private TLRPC.Document getCurrentQualityDocument() {
+        if (isManagedGif()) {
+            VideoPlayer.Quality quality = videoPlayer == null ? null : videoPlayer.getCurrentQuality();
+            return quality != null ? quality.getDownloadDocument() : getGifDocument(currentIndex);
+        }
+        return playbackDownloadDocument;
+    }
+
+    private TLRPC.Document getGifDocument(int index) {
+        if (index < 0 || index >= imagesArr.size()) return null;
+        MessageObject message = imagesArr.get(index);
+        if (!message.isGif()) return null;
+        if (message.isSecretMedia() || message.shouldEncryptPhotoOrVideo()) return message.getDocument();
+        if (isSamePlaybackMessage(message, gifQualityMessage) && gifQualityDocument != null) return gifQualityDocument;
+        ArrayList<VideoPlayer.Quality> qualities = ChooseDownloadQualityLayout.getGifQualities(message);
+        VideoPlayer.Quality saved = VideoPlayer.getSavedQuality(qualities, message);
+        VideoPlayer.Quality initial = saved == null ? VideoPlayer.getInitialQuality(qualities, message) : saved;
+        if (initial == null) {
+            for (VideoPlayer.Quality quality : qualities) {
+                if (initial == null || quality.getDownloadDocument().size < initial.getDownloadDocument().size) initial = quality;
+            }
+        }
+        boolean usePreview = saved == null && isSamePlaybackMessage(message, gifAnimationMessage) && gifAnimationDocument != null;
+        TLRPC.Document document = usePreview ? gifAnimationDocument : initial == null ? message.getDocumentFast() : initial.getDownloadDocument();
+        if (index == currentIndex && isSamePlaybackMessage(message, currentMessageObject)) {
+            gifQualities.clear();
+            gifQualities.addAll(qualities);
+            gifQualityMessage = message;
+            gifQualityDocument = document;
+            gifAutoQualitySelected = saved == null;
+            openingWithMediaPreviewQuality = usePreview;
+        }
+        return document;
+    }
+
+    private void applyGifQuality(VideoPlayer.Quality quality) {
+        if (!isManagedGif()) return;
+        openingWithMediaPreviewQuality = false;
+        gifAutoQualitySelected = quality == null;
+        if (videoPlayer != null && videoPlayer.getQualitiesCount() > 0) {
+            if (quality == null) {
+                videoPlayer.setAutoQuality(videoPlayer.getAutoQuality(currentMessageObject));
+            } else {
+                for (int index = 0; index < videoPlayer.getQualitiesCount(); index++) {
+                    VideoPlayer.Quality candidate = videoPlayer.getQuality(index);
+                    if (candidate.width == quality.width && candidate.height == quality.height && candidate.original == quality.original) {
+                        videoPlayer.setSelectedQuality(index);
+                        break;
+                    }
+                }
+            }
+            updateQualityItems();
+            return;
+        }
+        if (quality == null) quality = VideoPlayer.getInitialQuality(gifQualities, currentMessageObject);
+        if (quality == null) {
+            updateQualityItems();
+            return;
+        }
+        TLRPC.Document document = quality.getDownloadDocument();
+        if (document == null || gifQualityDocument != null && document.id == gifQualityDocument.id && document.dc_id == gifQualityDocument.dc_id) {
+            updateQualityItems();
+            return;
+        }
+        AnimatedFileDrawable animation = centerImage.getAnimation();
+        pendingGifSeek = animation == null ? -1 : animation.getCurrentProgressMs();
+        gifQualityDocument = document;
+        reloadPhotoQualityImages();
+    }
+
+    private void updateGifQualityItems() {
+        gifQualityLayout.removeAllViews();
+        if (!isManagedGif()) return;
+        getGifDocument(currentIndex);
+        if (videoPlayer != null && videoPlayer.getQualitiesCount() > 0) {
+            gifAutoQualitySelected = videoPlayer.isAutoQualitySelected();
+            VideoPlayer.Quality quality = videoPlayer.getCurrentQuality();
+            if (quality != null && quality.getDownloadDocument() != null) gifQualityDocument = quality.getDownloadDocument();
+        }
+        TextView header = new TextView(activityContext);
+        header.setText(getString(R.string.Quality));
+        header.setTypeface(AndroidUtilities.bold());
+        header.setPadding(dp(16), dp(9), dp(16), dp(8));
+        header.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        header.setTextColor(0xFFFFFFFF);
+        gifQualityLayout.addView(header, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+        TLRPC.Document current = getCurrentQualityDocument();
+        for (int index = gifQualities.size() > 1 ? -1 : 0; index < gifQualities.size(); index++) {
+            VideoPlayer.Quality quality = index < 0 ? null : gifQualities.get(index);
+            String title = quality == null ? getString(R.string.QualityAuto)
+                    : quality.original ? getString(R.string.QualityOriginal) : quality.toString();
+            ActionBarMenuSubItem item = ActionBarMenuItem.addItem(gifQualityLayout, 0, title, true, new DarkThemeResourceProvider());
+            TLRPC.Document document = quality == null ? null : quality.getDownloadDocument();
+            item.setChecked(quality == null ? gifAutoQualitySelected
+                    : (!gifAutoQualitySelected || gifQualities.size() == 1) && current != null && document != null
+                    && current.id == document.id && current.dc_id == document.dc_id);
+            item.setColors(0xfffafafa, 0xfffafafa);
+            item.setSelectorColor(0x0fffffff);
+            item.setOnClickListener(view -> {
+                VideoPlayer.saveQuality(quality, currentMessageObject);
+                applyGifQuality(quality);
+                gifItem.closeSubMenu();
+            });
+        }
+    }
+
+    private void onGifAnimationReady(ImageReceiver imageReceiver) {
+        if (imageReceiver != centerImage || !isManagedGif()) return;
+        AnimatedFileDrawable animation = imageReceiver.getAnimation();
+        if (animation == null || !animation.hasBitmap()) return;
+        boolean switchToAuto = openingWithMediaPreviewQuality && gifAutoQualitySelected && videoPlayer == null;
+        if (!switchToAuto && pendingGifSeek < 0) return;
+        if (switchToAuto) openingWithMediaPreviewQuality = false;
+        MessageObject message = currentMessageObject;
+        TLRPC.Document document = gifQualityDocument;
+        AndroidUtilities.runOnUIThread(() -> {
+            if (!isVisible || !isSamePlaybackMessage(message, currentMessageObject)
+                    || document != gifQualityDocument || animation != centerImage.getAnimation()) return;
+            if (pendingGifSeek >= 0 && animation != currentAnimation) {
+                animation.seekTo(pendingGifSeek, true);
+                pendingGifSeek = -1;
+            }
+            if (switchToAuto && gifAutoQualitySelected && videoPlayer == null) applyGifQuality(null);
+        });
+    }
+
     private void attachVideoQualityMenu(ActionBarMenuSubItem item, ChooseDownloadQualityLayout chooser, int id) {
         int foreground = menuItem.getPopupLayout().addViewToSwipeBack(chooser.layout);
         item.openSwipeBackLayout = () -> menuItem.getPopupLayout().getSwipeBack().openForeground(foreground);
         item.setOnClickListener(view -> {
-            if (isManagedVideo() && allowShare) openVideoQualityMenu(chooser, item);
+            if ((isManagedVideo() || isManagedGif()) && allowShare) openVideoQualityMenu(chooser, item);
             else {
                 actionBar.getActionBarMenuOnItemClick().onItemClick(id);
                 menuItem.closeSubMenu();
@@ -4664,10 +4840,67 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
     private void openVideoQualityMenu(ChooseDownloadQualityLayout chooser, ActionBarMenuSubItem item) {
         if (chooser == null || item == null || !allowShare) return;
-        if (chooser.update(currentMessageObject, playbackDownloadDocument)) {
+        if (isManagedGif()) {
+            int foreground;
+            if (chooser == chooseDownloadQualityLayout) {
+                chooser = chooseGifDownloadQualityLayout;
+                foreground = gifDownloadQualityForeground;
+            } else if (chooser == chooseShareQualityLayout) {
+                chooser = chooseGifShareQualityLayout;
+                foreground = gifShareQualityForeground;
+            } else {
+                chooser = chooseGifOpenQualityLayout;
+                foreground = gifOpenQualityForeground;
+            }
+            if (chooser.update(currentMessageObject, getCurrentQualityDocument())) {
+                if (!menuItem.isSubMenuShowing()) menuItem.toggleSubMenu();
+                menuItem.getPopupLayout().getSwipeBack().openForeground(foreground);
+            }
+        } else if (chooser.update(currentMessageObject, playbackDownloadDocument)) {
             if (!menuItem.isSubMenuShowing()) menuItem.toggleSubMenu();
             item.openSwipeBack();
         }
+    }
+
+    private boolean openPhotoQualityMenu(ChooseDownloadQualityLayout chooser, ActionBarMenuSubItem item, boolean saving) {
+        if (chooser == null || item == null || !allowShare || !hasPhotoQualityOptions(currentIndex)) return false;
+        MessageObject message = currentMessageObject;
+        TLRPC.Photo photo = getPhotoForQuality(currentIndex);
+        ArrayList<TLRPC.PhotoSize> sizes = getPhotoQualityOptions(currentIndex);
+        if (message == null || photo == null || sizes.size() < 2) return false;
+        MessageObject.GroupedMessages group = saving && parentChatActivity != null
+                ? parentChatActivity.getGroup(message.getGroupId()) : null;
+        boolean showSaveAll = group != null && group.messages.size() > 1;
+        boolean allPhotos = showSaveAll;
+        if (allPhotos) {
+            for (MessageObject groupedMessage : group.messages) {
+                allPhotos &= groupedMessage.isPhoto() && !groupedMessage.isLivePhoto();
+            }
+        }
+        String allItemsPluralKey = showSaveAll ? allPhotos ? "AllNPhotos" : "AllNMedia" : null;
+        int count = showSaveAll ? group.messages.size() : 0;
+        if (!chooser.updatePhoto(message, photo, sizes, getPhotoSizeForQuality(currentIndex), allItemsPluralKey, count)) {
+            return false;
+        }
+        if (!menuItem.isSubMenuShowing()) {
+            menuItem.toggleSubMenu();
+        }
+        item.openSwipeBack();
+        return true;
+    }
+
+    private void saveAllCurrentPhotoGroup() {
+        MessageObject message = currentMessageObject;
+        MessageObject.GroupedMessages group = message == null || parentChatActivity == null
+                ? null : parentChatActivity.getGroup(message.getGroupId());
+        if (group == null || group.messages.size() <= 1 || parentActivity == null) return;
+        if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE)
+                && parentActivity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            parentActivity.requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 4);
+            return;
+        }
+        menuItem.closeSubMenu();
+        saveViewerMessagesToGallery(new ArrayList<>(group.messages));
     }
 
     private void startVideoExport(MessageObject message, TLRPC.Document document, boolean saving) {
@@ -4684,6 +4917,11 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private void saveViewerMessagesToGallery(ArrayList<MessageObject> messages) {
+        if (messages.size() == 1 && messages.get(0) == currentMessageObject && currentMessageObject.isPhoto()
+                && !currentMessageObject.isLivePhoto() && getPhotoSizeForQuality(currentIndex) != null) {
+            savePhotoQualityToGallery(currentMessageObject);
+            return;
+        }
         boolean video = false, photo = false, livePhoto = false;
         for (MessageObject message : messages) {
             if (message.isLivePhoto()) livePhoto = true;
@@ -4698,9 +4936,48 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         }));
     }
 
+    private void sharePhotoQuality(MessageObject message) {
+        sharePhotoQuality(message, getPhotoForQuality(currentIndex), getPhotoSizeForQuality(currentIndex));
+    }
+
+    private void sharePhotoQuality(MessageObject message, TLRPC.Photo photo, TLRPC.PhotoSize photoSize) {
+        if (message == null || photo == null || photoSize == null) {
+            showDownloadAlert();
+            return;
+        }
+        menuItem.closeSubMenu();
+        FileDownloadSource source = FileDownloadSource.photo(message, photo, photoSize);
+        FileDownloadTasks tasks = FileDownloadTasks.getInstance(message.currentAccount);
+        int guid = classGuid;
+        final int[] registration = new int[1];
+        registration[0] = tasks.whenReady(source, new FileDownloadTasks.ReadyCallback() {
+            @Override
+            public void onReady(File file) {
+                tasks.release(source, registration[0]);
+                if (!isVisible || parentActivity == null || currentMessageObject != message || classGuid != guid || !allowShare) {
+                    return;
+                }
+                try {
+                    parentActivity.startActivityForResult(FileDownloadTasks.shareIntent(file, source.mime), 500);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    showDownloadAlert();
+                }
+            }
+
+            @Override
+            public void onCancelled() {
+                tasks.release(source, registration[0]);
+                if (isVisible && currentMessageObject == message && classGuid == guid && parentActivity != null) {
+                    showDownloadAlert();
+                }
+            }
+        });
+    }
+
     private void openReadyVideoShare() {
         if (parentActivity == null || !isVisible || viewerInBackground || ApplicationLoader.mainInterfacePaused
-                || externalPlaybackTransition || !isManagedVideo() || !allowShare || openingReadyShare) return;
+                || externalPlaybackTransition || !(isManagedVideo() || isManagedGif()) || !allowShare || openingReadyShare) return;
         FileDownloadTasks tasks = FileDownloadTasks.getInstance(currentAccount);
         for (TLRPC.Document document : tasks.shareDocuments(currentMessageObject)) {
             if (FileDownloadTasks.localFile(currentAccount, document, currentMessageObject) == null) continue;
@@ -4838,7 +5115,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private void onSharePressed() {
-        if (isManagedVideo() && allowShare) {
+        if ((isManagedVideo() || isManagedGif()) && allowShare) {
             openVideoQualityMenu(chooseShareQualityLayout, videoShareItem);
             return;
         }
@@ -4855,13 +5132,18 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                             AndroidUtilities.openUrl(parentActivity, currentMessageObject.messageOwner.media.webpage.url);
                             return;
                         }*/
-                if (!TextUtils.isEmpty(currentMessageObject.messageOwner.attachPath)) {
+                if (currentMessageObject.isPhoto() && !currentMessageObject.isLivePhoto() && getPhotoSizeForQuality(currentIndex) != null) {
+                    f = getCurrentPhotoQualityFile();
+                    if (f == null || !f.isFile()) {
+                        sharePhotoQuality(currentMessageObject);
+                        return;
+                    }
+                } else if (!TextUtils.isEmpty(currentMessageObject.messageOwner.attachPath)) {
                     f = new File(currentMessageObject.messageOwner.attachPath);
                     if (!f.exists()) {
                         f = null;
                     }
-                }
-                if (f == null) {
+                } else {
                     f = FileLoader.getInstance(currentAccount).getPathToMessage(currentMessageObject.messageOwner);
                 }
             } else if (currentFileLocationVideo != null) {
@@ -5147,7 +5429,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     }
                     closePhoto(true, false);
                 } else if (id == gallery_menu_save) {
-                    if (isManagedVideo() && allowShare) {
+                    if ((isManagedVideo() || isManagedGif()) && allowShare) {
                         openVideoQualityMenu(chooseDownloadQualityLayout, galleryButton);
                         return;
                     }
@@ -5567,7 +5849,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 } else if (id == gallery_menu_share || id == gallery_menu_share2) {
                     onSharePressed();
                 } else if (id == gallery_menu_openin) {
-                    if (isManagedVideo() && allowShare) {
+                    if ((isManagedVideo() || isManagedGif()) && allowShare) {
                         openVideoQualityMenu(chooseOpenQualityLayout, videoOpenItem);
                         return;
                     }
@@ -5855,6 +6137,19 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         videoItem.getPopupLayout().setFitItems(true);
         videoItem.setMenuXOffset(dp(3));
 
+        gifItem = menu.addItem(gallery_menu_gif_quality, R.drawable.video_settings);
+        gifItem.setContentDescription(getString(R.string.QualityList));
+        gifItem.getPopupLayout().setFitItems(true);
+        gifItem.setMenuXOffset(dp(3));
+        gifQualityLayout = new LinearLayout(activityContext);
+        gifQualityLayout.setOrientation(LinearLayout.VERTICAL);
+        gifItem.getPopupLayout().addView(gifQualityLayout);
+        gifItem.setOnClickListener(view -> {
+            updateGifQualityItems();
+            gifItem.toggleSubMenu();
+        });
+        gifItem.redrawPopup(0xf9222222);
+
         speedItem = new ActionBarMenuSlider.SpeedSlider(activityContext, resourcesProvider);
         speedItem.setStops(new float[]{0.5f, 1.0f, 1.5f, 2.0f, 2.5f});
         speedItem.setMinimumWidth(AndroidUtilities.dp(196));
@@ -5924,16 +6219,31 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         menuItem.getPopupLayout().setFitItems(true);
 
         chooseDownloadQualityLayout = new ChooseDownloadQualityLayout(activityContext, menuItem.getPopupLayout().getSwipeBack(),
-                (message, quality) -> startVideoExport(message, quality.getDownloadDocument(), true));
+                (message, quality) -> startVideoExport(message, quality.getDownloadDocument(), true),
+                this::savePhotoQualityToGallery, this::saveAllCurrentPhotoGroup);
         chooseShareQualityLayout = new ChooseDownloadQualityLayout(activityContext, menuItem.getPopupLayout().getSwipeBack(),
-                (message, quality) -> startVideoExport(message, quality.getDownloadDocument(), false));
+                (message, quality) -> startVideoExport(message, quality.getDownloadDocument(), false),
+                this::sharePhotoQuality, null);
         chooseOpenQualityLayout = new ChooseDownloadQualityLayout(activityContext, menuItem.getPopupLayout().getSwipeBack(),
                 (message, quality) -> openExternalVideo(message, quality.getDownloadDocument()));
+        chooseGifDownloadQualityLayout = new ChooseDownloadQualityLayout(activityContext, menuItem.getPopupLayout().getSwipeBack(),
+                (message, quality) -> startVideoExport(message, quality.getDownloadDocument(), true));
+        chooseGifShareQualityLayout = new ChooseDownloadQualityLayout(activityContext, menuItem.getPopupLayout().getSwipeBack(),
+                (message, quality) -> startVideoExport(message, quality.getDownloadDocument(), false));
+        chooseGifOpenQualityLayout = new ChooseDownloadQualityLayout(activityContext, menuItem.getPopupLayout().getSwipeBack(),
+                (message, quality) -> openExternalVideo(message, quality.getDownloadDocument()));
+        gifDownloadQualityForeground = menuItem.getPopupLayout().addViewToSwipeBack(chooseGifDownloadQualityLayout.layout);
+        gifShareQualityForeground = menuItem.getPopupLayout().addViewToSwipeBack(chooseGifShareQualityLayout.layout);
+        gifOpenQualityForeground = menuItem.getPopupLayout().addViewToSwipeBack(chooseGifOpenQualityLayout.layout);
 
         galleryButton = menuItem.addSwipeBackItem(R.drawable.msg_gallery, null, getString(R.string.SaveToGallery), chooseDownloadQualityLayout.layout).setColors(0xfffafafa, 0xfffafafa);
+        galleryButton.setRightIcon(0);
         galleryButton.setOnClickListener(v -> {
-            if (isManagedVideo() && allowShare && chooseDownloadQualityLayout.update(currentMessageObject, playbackDownloadDocument)) {
-                galleryButton.openSwipeBack();
+            if ((isManagedVideo() || isManagedGif()) && allowShare) {
+                openVideoQualityMenu(chooseDownloadQualityLayout, galleryButton);
+                return;
+            }
+            if (openPhotoQualityMenu(chooseDownloadQualityLayout, galleryButton, true)) {
                 return;
             }
             if (actionBar != null && actionBar.getActionBarMenuOnItemClick() != null) {
@@ -5953,8 +6263,17 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         menuItem.addSubItem(gallery_menu_create_sticker, R.drawable.msg_sticker, getString(R.string.CreateSticker)).setColors(0xfffafafa, 0xfffafafa);
         menuItem.addSubItem(gallery_menu_reply, R.drawable.menu_reply, getString(R.string.Reply)).setColors(0xfffafafa, 0xfffafafa);
         menuItem.addSubItem(gallery_menu_report, R.drawable.msg_report, getString(R.string.ReportProfilePhoto)).setColors(0xfffafafa, 0xfffafafa);
-        videoShareItem = menuItem.addSubItem(gallery_menu_share, R.drawable.msg_shareout, getString(R.string.ShareFile)).setColors(0xfffafafa, 0xfffafafa);
-        attachVideoQualityMenu(videoShareItem, chooseShareQualityLayout, gallery_menu_share);
+        videoShareItem = menuItem.addSwipeBackItem(R.drawable.msg_shareout, null, getString(R.string.ShareFile), chooseShareQualityLayout.layout).setColors(0xfffafafa, 0xfffafafa);
+        videoShareItem.setRightIcon(0);
+        videoShareItem.setId(gallery_menu_share);
+        videoShareItem.setOnClickListener(view -> {
+            if ((isManagedVideo() || isManagedGif()) && allowShare) {
+                openVideoQualityMenu(chooseShareQualityLayout, videoShareItem);
+            } else if (!openPhotoQualityMenu(chooseShareQualityLayout, videoShareItem, false)) {
+                actionBar.getActionBarMenuOnItemClick().onItemClick(gallery_menu_share);
+                menuItem.closeSubMenu();
+            }
+        });
         menuItem.addSubItem(gallery_menu_masks2, R.drawable.msg_sticker, getString(R.string.ShowStickers)).setColors(0xfffafafa, 0xfffafafa);
         //menuItem.addSubItem(gallery_menu_edit_avatar, R.drawable.photo_paint, LocaleController.getString(R.string.EditPhoto)).setColors(0xfffafafa, 0xfffafafa);
         menuItem.addSubItem(gallery_menu_set_as_main, R.drawable.msg_openprofile, getString(R.string.SetAsMain)).setColors(0xfffafafa, 0xfffafafa);
@@ -7762,25 +8081,38 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         gestureDetector.setIsLongpressEnabled(false);
         setDoubleTapEnabled(true);
 
-        ImageReceiver.ImageReceiverDelegate imageReceiverDelegate = (imageReceiver, set, thumb, memCache) -> {
-            if (imageReceiver == centerImage && set && !thumb) {
-                if (!isCurrentVideo && (currentEditMode == EDIT_MODE_CROP || sendPhotoType == SELECT_TYPE_AVATAR || sendPhotoType == SELECT_TYPE_STICKER) && photoCropView != null) {
-                    Bitmap bitmap = imageReceiver.getBitmap();
-                    if (bitmap != null) {
-                        photoCropView.setBitmap(bitmap, imageReceiver.getOrientation(), sendPhotoType != SELECT_TYPE_AVATAR && sendPhotoType != SELECT_TYPE_STICKER, true, paintingOverlay, cropTransform, null, null);
+        ImageReceiver.ImageReceiverDelegate imageReceiverDelegate = new ImageReceiver.ImageReceiverDelegate() {
+            @Override
+            public void didSetImage(ImageReceiver imageReceiver, boolean set, boolean thumb, boolean memCache) {
+                if (imageReceiver == centerImage && set && !thumb && openingPhotoPreviewSize != null
+                        && isSamePhotoSize(centerImage.getImageLocation(), openingPhotoPreviewSize)) {
+                    openingPhotoPreviewSize = null;
+                    applyPhotoQuality();
+                }
+                if (imageReceiver == centerImage && set && !thumb) {
+                    if (!isCurrentVideo && (currentEditMode == EDIT_MODE_CROP || sendPhotoType == SELECT_TYPE_AVATAR || sendPhotoType == SELECT_TYPE_STICKER) && photoCropView != null) {
+                        Bitmap bitmap = imageReceiver.getBitmap();
+                        if (bitmap != null) {
+                            photoCropView.setBitmap(bitmap, imageReceiver.getOrientation(), sendPhotoType != SELECT_TYPE_AVATAR && sendPhotoType != SELECT_TYPE_STICKER, true, paintingOverlay, cropTransform, null, null);
+                        }
+                    }
+                    if (paintingOverlay.getVisibility() == View.VISIBLE) {
+                        containerView.requestLayout();
+                    }
+                    detectFaces();
+                }
+                if (imageReceiver == centerImage && set && placeProvider != null && placeProvider.scaleToFill() && !ignoreDidSetImage && sendPhotoType != SELECT_TYPE_AVATAR && sendPhotoType != SELECT_TYPE_STICKER) {
+                    if (!wasLayout) {
+                        dontResetZoomOnFirstLayout = true;
+                    } else {
+                        setScaleToFill();
                     }
                 }
-                if (paintingOverlay.getVisibility() == View.VISIBLE) {
-                    containerView.requestLayout();
-                }
-                detectFaces();
             }
-            if (imageReceiver == centerImage && set && placeProvider != null && placeProvider.scaleToFill() && !ignoreDidSetImage && sendPhotoType != SELECT_TYPE_AVATAR && sendPhotoType != SELECT_TYPE_STICKER) {
-                if (!wasLayout) {
-                    dontResetZoomOnFirstLayout = true;
-                } else {
-                    setScaleToFill();
-                }
+
+            @Override
+            public void onAnimationReady(ImageReceiver imageReceiver) {
+                onGifAnimationReady(imageReceiver);
             }
         };
 
@@ -8509,12 +8841,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private void chooseQuality(int qualityIndex) {
         if (videoPlayer != null) {
             if (qualityIndex == VideoPlayer.QUALITY_AUTO) {
-                if (isManagedVideo()) releasePlaybackDownload();
+                if (isManagedVideo() || hasManagedGifQualities()) releasePlaybackDownload();
                 videoPlayer.setAutoQuality(videoPlayer.getAutoQuality(currentMessageObject));
             } else {
                 videoPlayer.setSelectedQuality(qualityIndex);
             }
-            if (isManagedVideo() && qualityIndex >= 0 && qualityIndex < videoPlayer.getQualitiesCount()) {
+            if ((isManagedVideo() || hasManagedGifQualities()) && qualityIndex >= 0 && qualityIndex < videoPlayer.getQualitiesCount()) {
                 externalPlaybackTransition = false;
                 TLRPC.Document document = videoPlayer.getQuality(qualityIndex).getDownloadDocument();
                 bindPlaybackDownload(document);
@@ -8542,26 +8874,335 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private int lastQualityIndexSelected;
+
+    private void updatePhotoQualityItems() {
+        ArrayList<TLRPC.PhotoSize> sizes = getPhotoQualityOptions(currentIndex);
+        photoQualityItemsDisplayed = true;
+        speedItem.setVisibility(View.GONE);
+        speedGap.setVisibility(View.GONE);
+        chooseSpeedLayout.setVisibility(View.GONE);
+        videoQualityLayout.setVisibility(View.VISIBLE);
+        videoQualityLayout.removeAllViews();
+        videoQualityItems.clear();
+
+        final TLRPC.PhotoSize selectedSize = getPhotoSizeForQuality(currentIndex);
+        TextView header = new TextView(activityContext);
+        header.setText(R.string.Quality);
+        header.setTypeface(AndroidUtilities.bold());
+        header.setPadding(dp(16), dp(9), dp(16), dp(8));
+        header.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        header.setTextColor(0xFFFFFFFF);
+        videoQualityLayout.addView(header, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        ActionBarMenuSubItem autoItem = ActionBarMenuItem.addItem(videoQualityLayout, 0, getString(R.string.QualityAuto), true, new DarkThemeResourceProvider());
+        autoItem.setChecked(photoQuality == PHOTO_QUALITY_AUTO);
+        autoItem.setColors(0xfffafafa, 0xfffafafa);
+        autoItem.setSelectorColor(0x0fffffff);
+        autoItem.setOnClickListener(view -> {
+            photoQuality = PHOTO_QUALITY_AUTO;
+            applyPhotoQuality();
+            videoItem.toggleSubMenu();
+        });
+        videoQualityItems.add(autoItem);
+
+        for (int i = sizes.size() - 1; i >= 0; i--) {
+            TLRPC.PhotoSize size = sizes.get(i);
+            int target = Math.max(size.w, size.h);
+            SpannableStringBuilder title = new SpannableStringBuilder();
+            title.append(Integer.toString(size.w)).append(" x ").append(Integer.toString(size.h));
+            boolean selected = photoQuality != PHOTO_QUALITY_AUTO && selectedSize == size;
+            ActionBarMenuSubItem item = ActionBarMenuItem.addItem(videoQualityLayout, 0, title, true, new DarkThemeResourceProvider());
+            item.setChecked(selected);
+            item.setColors(0xfffafafa, 0xfffafafa);
+            item.setSelectorColor(0x0fffffff);
+            item.setOnClickListener(view -> {
+                photoQuality = target;
+                applyPhotoQuality();
+                videoItem.toggleSubMenu();
+            });
+            videoQualityItems.add(item);
+        }
+        videoItemIcon.bottomText.setText(photoQualityShortName(selectedSize), true);
+    }
+
+    private String photoQualityShortName(TLRPC.PhotoSize size) {
+        return size == null ? getString(R.string.QualityAuto) : Integer.toString(Math.max(size.w, size.h));
+    }
+
+    private TLRPC.Photo getPhotoForQuality(int index) {
+        if (!imagesArrLocations.isEmpty() && index >= 0 && index < imagesArrLocations.size()) {
+            ImageLocation location = imagesArrLocations.get(index);
+            return location == null ? null : location.photo;
+        }
+        if (!imagesArr.isEmpty() && index >= 0 && index < imagesArr.size()) {
+            MessageObject message = imagesArr.get(index);
+            if (message.messageOwner instanceof TLRPC.TL_messageService && message.messageOwner.action.photo != null) {
+                return message.messageOwner.action.photo;
+            }
+            if (message.sponsoredMedia != null && message.sponsoredMedia.photo != null) {
+                return message.sponsoredMedia.photo;
+            }
+            TLRPC.MessageMedia media = MessageObject.getMedia(message.messageOwner);
+            if (media instanceof TLRPC.TL_messageMediaPhoto) {
+                return media.photo;
+            }
+            if (media instanceof TLRPC.TL_messageMediaWebPage && media.webpage != null) {
+                return media.webpage.photo;
+            }
+            return message.photoThumbsObject instanceof TLRPC.Photo ? (TLRPC.Photo) message.photoThumbsObject : null;
+        }
+        if (!imagesArrLocations.isEmpty() && index >= 0 && index < imagesArrLocations.size()) {
+            ImageLocation location = imagesArrLocations.get(index);
+            return location == null ? null : location.photo;
+        }
+        if (!imagesArrLocals.isEmpty() && index >= 0 && index < imagesArrLocals.size()) {
+            Object item = imagesArrLocals.get(index);
+            if (item instanceof TLRPC.BotInlineResult) {
+                return ((TLRPC.BotInlineResult) item).photo;
+            }
+        }
+        if (pageBlocksAdapter != null) {
+            TLObject media = pageBlocksAdapter.getMedia(index);
+            return media instanceof TLRPC.Photo ? (TLRPC.Photo) media : null;
+        }
+        return null;
+    }
+
+    private ArrayList<TLRPC.PhotoSize> getPhotoQualitySourceSizes(int index) {
+        ArrayList<TLRPC.PhotoSize> sizes = null;
+        if (!imagesArr.isEmpty() && index >= 0 && index < imagesArr.size()) {
+            MessageObject message = imagesArr.get(index);
+            if (message.sponsoredMedia != null && message.sponsoredMedia.photo != null) {
+                sizes = message.sponsoredMedia.photo.sizes;
+            } else if (message.photoThumbs != null && !message.photoThumbs.isEmpty()) {
+                sizes = message.photoThumbs;
+            } else {
+                TLRPC.Photo photo = getPhotoForQuality(index);
+                sizes = photo == null ? null : photo.sizes;
+            }
+        } else {
+            TLRPC.Photo photo = getPhotoForQuality(index);
+            sizes = photo == null ? null : photo.sizes;
+        }
+        return sizes;
+    }
+
+    private ArrayList<TLRPC.PhotoSize> getPhotoQualityOptions(int index) {
+        ArrayList<TLRPC.PhotoSize> source = getPhotoQualitySourceSizes(index);
+        ArrayList<TLRPC.PhotoSize> options = new ArrayList<>();
+        if (source == null) {
+            return options;
+        }
+        ArrayList<Integer> seenSizes = new ArrayList<>();
+        for (TLRPC.PhotoSize size : source) {
+            if (size == null || size.location == null || size.w <= 0 || size.h <= 0
+                    || size instanceof TLRPC.TL_photoStrippedSize || size instanceof TLRPC.TL_photoPathSize
+                    || size instanceof TLRPC.TL_photoCachedSize || size instanceof TLRPC.TL_photoSizeEmpty) {
+                continue;
+            }
+            int maxSide = Math.max(size.w, size.h);
+            if (seenSizes.contains(maxSide)) {
+                continue;
+            }
+            seenSizes.add(maxSide);
+            options.add(size);
+        }
+        Collections.sort(options, (first, second) -> Integer.compare(Math.max(first.w, first.h), Math.max(second.w, second.h)));
+        return options;
+    }
+
+    private TLRPC.PhotoSize getPhotoSizeForQuality(int index) {
+        if (index < 0 || !imagesArr.isEmpty() && index >= imagesArr.size()
+                || imagesArr.isEmpty() && imagesArrLocations.isEmpty() && imagesArrLocals.isEmpty()
+                && (pageBlocksAdapter == null || index >= pageBlocksAdapter.getItemsCount())) {
+            return null;
+        }
+        ArrayList<TLRPC.PhotoSize> options = getPhotoQualityOptions(index);
+        if (options.isEmpty()) {
+            return null;
+        }
+        if (index == currentIndex && openingPhotoPreviewSize != null) {
+            return openingPhotoPreviewSize;
+        }
+        int target = photoQuality == PHOTO_QUALITY_AUTO ? getAutoPhotoQualityTarget() : photoQuality;
+        return FileLoader.getClosestPhotoSizeWithSize(options, target, false, null, true);
+    }
+
+    private ImageLocation getPhotoImageLocation(int index, TLRPC.PhotoSize size) {
+        if (size == null) {
+            return null;
+        }
+        TLRPC.Photo photo = getPhotoForQuality(index);
+        return photo == null ? null : ImageLocation.getForObject(size, photo);
+    }
+
+    private void reloadPhotoQualityImages() {
+        currentFileNames[0] = getFileName(currentIndex);
+        currentFileNames[1] = getFileName(currentIndex + 1);
+        currentFileNames[2] = getFileName(currentIndex - 1);
+        centerImage.setCrossfadeWithOldImage(true);
+        try {
+            setIndexToImage(centerImage, currentIndex, null);
+        } finally {
+            centerImage.setCrossfadeWithOldImage(false);
+        }
+        setIndexToImage(leftImage, currentIndex - 1, leftCropTransform);
+        setIndexToImage(rightImage, currentIndex + 1, rightCropTransform);
+        for (int i = 0; i < 3; i++) {
+            checkProgress(i, false, false);
+        }
+        updateQualityItems();
+        containerView.invalidate();
+    }
+
+    private boolean isSamePhotoSize(ImageLocation location, TLRPC.PhotoSize size) {
+        return location != null && location.location != null && size != null && location.location == size.location;
+    }
+
+    private File getCurrentPhotoQualityFile() {
+        TLRPC.PhotoSize photoSize = getPhotoSizeForQuality(currentIndex);
+        return photoSize == null ? null : FileLoader.getInstance(currentAccount).getPathToAttach(photoSize);
+    }
+
+    private void savePhotoQualityToGallery(MessageObject message) {
+        savePhotoQualityToGallery(message, getPhotoForQuality(currentIndex), getPhotoSizeForQuality(currentIndex));
+    }
+
+    private void savePhotoQualityToGallery(MessageObject message, TLRPC.Photo photo, TLRPC.PhotoSize photoSize) {
+        if (photoSize == null || photo == null) {
+            return;
+        }
+        menuItem.closeSubMenu();
+        if (parentActivity == null || Build.VERSION.SDK_INT >= 23
+                && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE)
+                && parentActivity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            if (parentActivity != null) {
+                parentActivity.requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 4);
+            }
+            return;
+        }
+        MessagesStorage.IntCallback callback = FileExport.onSaved(this, (viewer, count) -> {
+            if (count > 0 && viewer.isVisible && viewer.parentActivity != null && viewer.containerView != null) {
+                BulletinFactory.createSaveMediaToGalleryBulletin(viewer.containerView, count, false, true, false, 0xf9222222, 0xffffffff).show();
+            }
+        });
+        FileDownloadTasks.getInstance(message.currentAccount).export(FileDownloadSource.photo(message, photo, photoSize),
+                FileExport.Target.GALLERY, success -> callback.run(success ? 1 : 0));
+    }
+
+    private int getAutoPhotoQualityTarget() {
+        int networkType = ApplicationLoader.getAutodownloadNetworkType();
+        if (networkType == StatsController.TYPE_ROAMING) {
+            return 640;
+        }
+        if (networkType == StatsController.TYPE_WIFI) {
+            return AndroidUtilities.getPhotoSize(true);
+        }
+        return AndroidUtilities.getPhotoSize();
+    }
+
+    private boolean hasPhotoQualityOptions(int index) {
+        if (currentMessageObject != null && (!currentMessageObject.isPhoto() || currentMessageObject.isVideo() || currentMessageObject.isLivePhoto())) {
+            return false;
+        }
+        return getPhotoSizeForQuality(index) != null && getPhotoQualityOptions(index).size() > 1;
+    }
+
+    private void applyPhotoQuality() {
+        if (currentIndex < 0 || !hasPhotoQualityOptions(currentIndex)) {
+            return;
+        }
+        TLRPC.PhotoSize selectedSize = getPhotoSizeForQuality(currentIndex);
+        if (openingPhotoPreviewSize == selectedSize) {
+            openingPhotoPreviewSize = null;
+        }
+        if (isSamePhotoSize(centerImage.getImageLocation(), selectedSize)) {
+            updateQualityItems();
+            return;
+        }
+        reloadPhotoQualityImages();
+    }
+
+    private boolean preparePhotoPreviewQuality() {
+        openingPhotoPreviewSize = null;
+        if (photoQuality != PHOTO_QUALITY_AUTO || !hasPhotoQualityOptions(currentIndex) || currentThumb == null) return false;
+        int previewWidth = currentThumb.getWidth();
+        int previewHeight = currentThumb.getHeight();
+        if (previewWidth <= 0 || previewHeight <= 0) return false;
+        for (TLRPC.PhotoSize size : getPhotoQualityOptions(currentIndex)) {
+            if (size.w >= previewWidth && size.h >= previewHeight) {
+                openingPhotoPreviewSize = size;
+                break;
+            }
+        }
+        return openingPhotoPreviewSize != null;
+    }
+
+    private void applyPhotoPreviewQuality() {
+        openingPhotoPreviewSize = null;
+        if (currentMessageObject != null && currentMessageObject.isPhoto() && !currentMessageObject.isVideo() && !currentMessageObject.isLivePhoto()) {
+            preparePhotoPreviewQuality();
+        }
+        openingWithMediaPreviewQuality = false;
+        if (isManagedGif() && videoPlayer == null) {
+            openingWithMediaPreviewQuality = gifAutoQualitySelected && isSamePlaybackMessage(currentMessageObject, gifAnimationMessage)
+                    && gifQualityDocument != null && gifAnimationDocument != null
+                    && gifQualityDocument.id == gifAnimationDocument.id && gifQualityDocument.dc_id == gifAnimationDocument.dc_id;
+            return;
+        }
+        if (currentMessageObject == null || !(currentMessageObject.isGif() || currentMessageObject.isVideo()) || !currentMessageObject.hasVideoQualities()) return;
+        VideoPlayer.VideoUri previewQuality = currentMessageObject.thumbQuality;
+        if (previewQuality == null || currentMessageObject.videoQualities == null) return;
+        for (VideoPlayer.Quality quality : currentMessageObject.videoQualities) {
+            for (VideoPlayer.VideoUri uri : quality.uris) {
+                if (uri == previewQuality || uri.document == previewQuality.document) {
+                    openingWithMediaPreviewQuality = true;
+                    return;
+                }
+            }
+        }
+    }
+
     private void updateQualityItems() {
-        if (videoPlayer == null || videoPlayer.getQualitiesCount() <= 1) {
+        boolean showVideoControls = isEmbedVideo || (currentMessageObject != null
+                && currentMessageObject.isVideo() && !currentMessageObject.isLivePhoto());
+        boolean showGifQualities = isManagedGif();
+        boolean showPhotoQualities = !showVideoControls && hasPhotoQualityOptions(currentIndex);
+        gifItem.setVisibility(showGifQualities ? View.VISIBLE : View.GONE);
+        if (showGifQualities) updateGifQualityItems();
+        else gifItem.closeSubMenu();
+        videoItem.setVisibility(showVideoControls || showPhotoQualities ? View.VISIBLE : View.GONE);
+        loopItem.setVisibility(showVideoControls ? View.VISIBLE : View.GONE);
+        if (castItem != null) {
+            castItem.setVisibility(showVideoControls ? View.VISIBLE : View.GONE);
+        }
+        if (showPhotoQualities) {
+            updatePhotoQualityItems();
+            return;
+        }
+        if (!showVideoControls || videoPlayer == null || videoPlayer.getQualitiesCount() <= 1) {
+            if (photoQualityItemsDisplayed) {
+                videoQualityLayout.removeAllViews();
+                videoQualityItems.clear();
+                photoQualityItemsDisplayed = false;
+            }
             videoQualityLayout.setVisibility(View.GONE);
             chooseSpeedLayout.setVisibility(View.VISIBLE);
-//            videoItem.setVisibility(View.GONE);
             galleryButton.setRightIcon(0);
             videoItemIcon.bottomText.setText("", true);
             lastQualityIndexSelected = -1;
             return;
         }
-        galleryButton.setRightIcon(R.drawable.msg_arrowright);
-//        videoItem.setVisibility(View.VISIBLE);
+        galleryButton.setRightIcon(0);
         chooseSpeedLayout.setVisibility(View.GONE);
         videoQualityLayout.setVisibility(View.VISIBLE);
         final VideoPlayer.Quality currentQuality = videoPlayer.getCurrentQuality();
         final int qualityIndexSelected = videoPlayer.getCurrentQualityIndex();
         final int firstQuality = -1;
-        if (videoPlayer.getQualitiesCount() - firstQuality != videoQualityItems.size()) {
+        if (photoQualityItemsDisplayed || videoPlayer.getQualitiesCount() - firstQuality != videoQualityItems.size()) {
             videoQualityLayout.removeAllViews();
             videoQualityItems.clear();
+            photoQualityItemsDisplayed = false;
 
             final TextView header = new TextView(activityContext);
             header.setText(getString(R.string.QualityList));
@@ -10278,6 +10919,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             }
         }
         if (playbackState == ExoPlayer.STATE_READY) {
+            if (openingWithMediaPreviewQuality && videoPlayer != null && currentMessageObject != null
+                    && (isManagedVideo() || hasManagedGifQualities())
+                    && videoPlayer.isAutoQualitySelected()) {
+                openingWithMediaPreviewQuality = false;
+                videoPlayer.setAutoQuality(videoPlayer.getAutoQuality(currentMessageObject));
+            }
             if (aspectRatioFrameLayout != null && aspectRatioFrameLayout.getVisibility() != View.VISIBLE) {
                 aspectRatioFrameLayout.setVisibility(View.VISIBLE);
             }
@@ -10808,7 +11455,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             videoPlayer.setAllowAutoQuality(true);
             videoPlayer.setManagedPlayback(isManagedVideo() ? currentMessageObject : null);
             videoPlayer.setOnQualitySelectedListener(quality -> {
-                if (!videoPlayer.isAutoQualitySelected()
+                if ((isManagedVideo() || hasManagedGifQualities()) && !videoPlayer.isAutoQualitySelected()
                         && !playerStoppedForDownload && !viewerInBackground && !externalPlaybackTransition) {
                     bindPlaybackDownload(quality.getDownloadDocument());
                 }
@@ -10816,9 +11463,21 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             if (videoUrises != null) {
                 VideoPlayer.Quality savedQuality = videoUrises.size() > 1
                         ? VideoPlayer.getSavedQuality(videoUrises, currentMessageObject) : null;
-                VideoPlayer.Quality initialQuality = isManagedVideo() && savedQuality == null
+                VideoPlayer.Quality initialQuality = (isManagedVideo() || hasManagedGifQualities()) && savedQuality == null
                         ? VideoPlayer.getInitialQuality(videoUrises, currentMessageObject) : savedQuality;
-                videoPlayer.preparePlayer(videoUrises, initialQuality, isManagedVideo() && savedQuality == null);
+                if (openingWithMediaPreviewQuality && savedQuality == null && currentMessageObject != null && currentMessageObject.videoQualities != null) {
+                    VideoPlayer.VideoUri previewQuality = currentMessageObject.thumbQuality;
+                    for (VideoPlayer.Quality quality : videoUrises) {
+                        for (VideoPlayer.VideoUri qualityUri : quality.uris) {
+                            if (qualityUri == previewQuality || previewQuality != null && qualityUri.document == previewQuality.document) {
+                                initialQuality = quality;
+                                break;
+                            }
+                        }
+                        if (initialQuality == quality) break;
+                    }
+                }
+                videoPlayer.preparePlayer(videoUrises, initialQuality, (isManagedVideo() || hasManagedGifQualities()) && savedQuality == null);
             } else {
                 videoPlayer.preparePlayer(uri, "other", FileLoader.PRIORITY_HIGH, videoByteOffset);
             }
@@ -13669,7 +14328,11 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 if (index >= imagesArr.size()) {
                     return null;
                 }
-                return FileLoader.getMessageFileName(imagesArr.get(index).messageOwner);
+                TLRPC.Document gifDocument = getGifDocument(index);
+                if (gifDocument != null) return FileLoader.getAttachFileName(gifDocument);
+                TLRPC.PhotoSize photoSize = getPhotoSizeForQuality(index);
+                return photoSize != null ? FileLoader.getAttachFileName(photoSize)
+                        : FileLoader.getMessageFileName(imagesArr.get(index).messageOwner);
             }
         } else if (!imagesArrLocals.isEmpty()) {
             if (index >= imagesArrLocals.size()) {
@@ -13715,17 +14378,28 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             if (size != null && imagesArrLocationsSizes.get(index) != null) {
                 size[0] = imagesArrLocationsSizes.get(index);
             }
-            return imagesArrLocationsVideo.get(index);
+            ImageLocation imageLocation = imagesArrLocations.get(index);
+            ImageLocation videoLocation = imagesArrLocationsVideo.get(index);
+            if (videoLocation != null && videoLocation != imageLocation) {
+                return videoLocation;
+            }
+            TLRPC.PhotoSize photoSize = getPhotoSizeForQuality(index);
+            return photoSize == null ? imageLocation : getPhotoImageLocation(index, photoSize);
         } else if (!imagesArr.isEmpty()) {
             if (index >= imagesArr.size()) {
                 return null;
             }
             MessageObject message = imagesArr.get(index);
+            TLRPC.Document gifDocument = getGifDocument(index);
+            if (gifDocument != null) {
+                if (size != null) size[0] = gifDocument.size;
+                return ImageLocation.getForDocument(gifDocument);
+            }
             if (message.messageOwner instanceof TLRPC.TL_messageService) {
                 if (message.messageOwner.action instanceof TLRPC.TL_messageActionUserUpdatedPhoto) {
                     return null;
                 } else {
-                    TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(message.photoThumbs, AndroidUtilities.getPhotoSize());
+                    TLRPC.PhotoSize sizeFull = getPhotoSizeForQuality(index);
                     if (sizeFull != null) {
                         if (size != null) {
                             size[0] = sizeFull.size;
@@ -13733,7 +14407,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                                 size[0] = -1;
                             }
                         }
-                        return ImageLocation.getForObject(sizeFull, message.photoThumbsObject);
+                        return getPhotoImageLocation(index, sizeFull);
                     } else if (size != null) {
                         size[0] = -1;
                     }
@@ -13742,7 +14416,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 if (message.sponsoredMedia.document != null) {
                     return ImageLocation.getForDocument(message.sponsoredMedia.document);
                 } else if (message.sponsoredMedia.photo != null) {
-                    final TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(message.sponsoredMedia.photo.sizes, AndroidUtilities.getPhotoSize(), false, null, true);
+                    final TLRPC.PhotoSize sizeFull = getPhotoSizeForQuality(index);
                     if (sizeFull != null) {
                         if (size != null) {
                             size[0] = sizeFull.size;
@@ -13750,7 +14424,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                                 size[0] = -1;
                             }
                         }
-                        return ImageLocation.getForObject(sizeFull, message.sponsoredMedia.photo);
+                        return getPhotoImageLocation(index, sizeFull);
                     } else if (size != null) {
                         size[0] = -1;
                     }
@@ -13763,7 +14437,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     return ImageLocation.getForDocument(message.getDocument());
                 } else {
                     TLRPC.FileLocation location;
-                    TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(message.photoThumbs, AndroidUtilities.getPhotoSize(true), false, null, true);
+                    TLRPC.PhotoSize sizeFull = getPhotoSizeForQuality(index);
                     if (sizeFull != null) {
                         if (size != null) {
                             size[0] = sizeFull.size;
@@ -13771,7 +14445,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                                 size[0] = -1;
                             }
                         }
-                        return ImageLocation.getForObject(sizeFull, message.photoThumbsObject);
+                        return getPhotoImageLocation(index, sizeFull);
                     } else if (size != null) {
                         size[0] = -1;
                     }
@@ -13816,11 +14490,13 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             if (size != null && imagesArrLocationsSizes.get(index) != null) {
                 size[0] = imagesArrLocationsSizes.get(index);
             }
-            if (imagesArrLocationsVideo.get(index) != null) {
-                return imagesArrLocationsVideo.get(index).location;
-            } else {
-                return null;
+            ImageLocation imageLocation = imagesArrLocations.get(index);
+            ImageLocation videoLocation = imagesArrLocationsVideo.get(index);
+            if (videoLocation != null && videoLocation != imageLocation) {
+                return videoLocation.location;
             }
+            TLRPC.PhotoSize photoSize = getPhotoSizeForQuality(index);
+            return photoSize == null ? imageLocation == null ? null : imageLocation.location : photoSize;
         } else if (!imagesArr.isEmpty()) {
             if (index >= imagesArr.size()) {
                 return null;
@@ -13830,7 +14506,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 if (message.messageOwner.action instanceof TLRPC.TL_messageActionUserUpdatedPhoto) {
                     return message.messageOwner.action.newUserPhoto.photo_big;
                 } else {
-                    TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(message.photoThumbs, AndroidUtilities.getPhotoSize());
+                    TLRPC.PhotoSize sizeFull = getPhotoSizeForQuality(index);
                     if (sizeFull != null) {
                         if (size != null) {
                             size[0] = sizeFull.size;
@@ -13854,7 +14530,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     }
                     return thumb;
                 } else if (message.sponsoredMedia.photo != null) {
-                    TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(message.sponsoredMedia.photo.sizes, AndroidUtilities.getPhotoSize(), false, null, true);
+                    TLRPC.PhotoSize sizeFull = getPhotoSizeForQuality(index);
                     if (sizeFull != null) {
                         if (size != null) {
                             size[0] = sizeFull.size;
@@ -13869,7 +14545,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 }
             } else if (MessageObject.getMedia(message.messageOwner) instanceof TLRPC.TL_messageMediaPhoto && MessageObject.getMedia(message.messageOwner).photo != null || MessageObject.getMedia(message.messageOwner) instanceof TLRPC.TL_messageMediaWebPage && MessageObject.getMedia(message.messageOwner).webpage != null) {
                 TLRPC.FileLocation location;
-                TLRPC.PhotoSize sizeFull = FileLoader.getClosestPhotoSizeWithSize(message.photoThumbs, AndroidUtilities.getPhotoSize(true), false, null, true);
+                TLRPC.PhotoSize sizeFull = getPhotoSizeForQuality(index);
                 if (sizeFull != null) {
                     if (size != null) {
                         size[0] = sizeFull.size;
@@ -14059,6 +14735,23 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
     private void onPhotoShow(final MessageObject messageObject, final TLRPC.FileLocation fileLocation, ImageLocation imageLocation, ImageLocation videoLocation, final ArrayList<MessageObject> messages, final ArrayList<SecureDocument> documents, final List<Object> photos, int index, final PlaceProviderObject object) {
         classGuid = ConnectionsManager.generateClassGuid();
+        photoQuality = PHOTO_QUALITY_AUTO;
+        gifQualities.clear();
+        gifQualityMessage = null;
+        gifQualityDocument = null;
+        gifAutoQualitySelected = true;
+        pendingGifSeek = -1;
+        gifAnimationMessage = currentAnimation != null && messageObject != null && messageObject.isGif() ? messageObject : null;
+        ImageLocation animationLocation = object == null || object.imageReceiver == null ? null : object.imageReceiver.getMediaLocation();
+        if (animationLocation == null || animationLocation.document == null) {
+            animationLocation = object == null || object.imageReceiver == null ? null : object.imageReceiver.getImageLocation();
+        }
+        gifAnimationDocument = gifAnimationMessage == null ? null
+                : animationLocation != null && animationLocation.document != null ? animationLocation.document
+                : messageObject.thumbQuality != null ? messageObject.thumbQuality.document : messageObject.getDocumentFast();
+        openingPhotoPreviewSize = null;
+        openingWithMediaPreviewQuality = false;
+        lastPhotoQualityNetworkType = ApplicationLoader.getAutodownloadNetworkType();
         customTitle = null;
         disableSelection = false;
         currentMessageObject = null;
@@ -14193,6 +14886,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         speedItem.setVisibility(View.GONE);
         speedGap.setVisibility(View.GONE);
         videoItem.setVisibility(View.GONE);
+        gifItem.setVisibility(View.GONE);
+        gifItem.closeSubMenu();
         actionBar.setTranslationY(0);
         dialogPhotos = null;
 
@@ -14478,6 +15173,10 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 totalImagesCount = imagesArr.size();
             }
             setImageIndex(index);
+            applyPhotoPreviewQuality();
+            if (openingPhotoPreviewSize != null) {
+                reloadPhotoQualityImages();
+            }
         } else if (photos != null) {
             if (sendPhotoType != SELECT_TYPE_NO_SELECT && !sendPhotoTypeIsGif && !sendPhotoTypeIsPollMedia && (sendPhotoType == 0 || sendPhotoType == 4 || (sendPhotoType == 2 || sendPhotoType == 5) && photos.size() > 1) && !disableSelection) {
                 checkImageView.setVisibility(View.VISIBLE);
@@ -14856,7 +15555,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     menuItem.checkHideMenuItem();
                 } else {
                     speedItem.setVisibility(View.GONE);
-                    videoItem.setVisibility(View.GONE);
                     speedGap.setVisibility(View.GONE);
                     menuItem.hideSubItem(gallery_menu_openin);
                     menuItem.checkHideMenuItem();
@@ -15018,6 +15716,11 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 galleryButton.setVisibility(View.VISIBLE);
                 galleryGap.setVisibility(View.VISIBLE);
                 menuItem.showSubItem(gallery_menu_share);
+            }
+            if (newMessageObject.isGif()) {
+                menuItem.setSubItemShown(gallery_menu_openin, allowShare && !newMessageObject.isSecretMedia()
+                        && !newMessageObject.shouldEncryptPhotoOrVideo() && newMessageObject.getDocumentFast() != null);
+                menuItem.checkHideMenuItem();
             }
             groupedPhotosListView.fillList();
         } else if (!secureDocuments.isEmpty()) {
@@ -15862,6 +16565,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 currentThumb = null;
             }
         }
+        openingPhotoPreviewSize = null;
+        openingWithMediaPreviewQuality = false;
         currentFileNames[0] = getFileName(index);
         currentFileNames[1] = getFileName(index + 1);
         currentFileNames[2] = getFileName(index - 1);
@@ -15921,7 +16626,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             // mediaDidLoad replaces MessageObject instances while the same file is playing.
             // Releasing that binding here would cancel its stream before preparation finishes.
             if (!isSamePlaybackMessage(currentMessageObject, newMessageObject)) releaseVideoPlayback();
+            if (!isSamePlaybackMessage(newMessageObject, gifQualityMessage)) pendingGifSeek = -1;
             currentMessageObject = newMessageObject;
+            if (isManagedGif()) getGifDocument(currentIndex);
             if (newMessageObject != null) {
                 newMessageObject.openedInViewer = true;
             }
@@ -15941,25 +16648,22 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     }
                     setDoubleTapEnabled(true);
                 } else {
-                    galleryButton.setVisibility(View.GONE);
-                    galleryGap.setVisibility(View.GONE);
+                    galleryButton.setVisibility(allowShare && isManagedGif() ? View.VISIBLE : View.GONE);
+                    galleryGap.setVisibility(allowShare && isManagedGif() ? View.VISIBLE : View.GONE);
                     setDoubleTapEnabled(false);
                 }
             }
             if (isVideo && !isLivePhoto || isEmbedVideo) {
                 speedItem.setVisibility(View.VISIBLE);
-                videoItem.setVisibility(View.VISIBLE);
                 menuItem.showSubItem(gallery_menu_speed);
                 menuItem.setSubItemShown(gallery_menu_create_sticker, false);
                 speedGap.setVisibility(menuItem.getVisibleSubItemsCount() > 1 ? View.VISIBLE : View.GONE);
             } else {
                 speedItem.setVisibility(View.GONE);
-                videoItem.setVisibility(View.GONE);
                 speedGap.setVisibility(View.GONE);
                 menuItem.setSubItemShown(gallery_menu_create_sticker, !noforwards && currentMessageObject != null && currentMessageObject.isPhoto() && !currentMessageObject.isLivePhoto());
                 menuItem.checkHideMenuItem();
             }
-            updateQualityItems();
         } else if (!secureDocuments.isEmpty()) {
             if (index < 0 || index >= secureDocuments.size()) {
                 closePhoto(false, false);
@@ -16174,6 +16878,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
         centerImageIsVideo = isVideo;
         centerImageIsLivePhoto = isLivePhoto;
+        updateQualityItems();
 
         if (prevIndex == -1 || force) {
             setImages();
@@ -16599,7 +17304,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         } else if (a == 2) {
             index -= 1;
         }
-        if (currentFileNames[a] != null) {
+        final String expectedFileName = currentFileNames[a];
+        if (expectedFileName != null) {
             File f1 = null;
             File f2 = null;
             boolean fileExist = false;
@@ -16608,7 +17314,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             boolean canStream = false;
             boolean canAutoPlay = false;
             MessageObject messageObject = null;
-            if (a == 0 && currentIndex == 0 && currentAnimation != null) {
+            if (a == 0 && currentIndex == 0 && currentAnimation != null && !isManagedGif()) {
                 fileExist = currentAnimation.hasBitmap();
             }
             if (currentMessageObject != null) {
@@ -16622,12 +17328,21 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     photoProgressViews[a].setBackgroundState(PROGRESS_NONE, animated, true);
                     return;
                 }
-                if (!TextUtils.isEmpty(messageObject.messageOwner.attachPath)) {
+                TLRPC.Document gifDocument = getGifDocument(index);
+                if (gifDocument != null) {
+                    f1 = FileDownloadTasks.localFile(currentAccount, gifDocument, messageObject);
+                } else if (!TextUtils.isEmpty(messageObject.messageOwner.attachPath)) {
                     f1 = new File(messageObject.messageOwner.attachPath);
                 }
-                if (MessageObject.getMedia(messageObject.messageOwner) instanceof TLRPC.TL_messageMediaWebPage && MessageObject.getMedia(messageObject.messageOwner).webpage != null && MessageObject.getMedia(messageObject.messageOwner).webpage.document == null) {
+                if (gifDocument != null) {
+                    f2Resolver = () -> FileLoader.getInstance(currentAccount).getPathToAttach(gifDocument, null, false, true);
+                } else if (MessageObject.getMedia(messageObject.messageOwner) instanceof TLRPC.TL_messageMediaWebPage && MessageObject.getMedia(messageObject.messageOwner).webpage != null && MessageObject.getMedia(messageObject.messageOwner).webpage.document == null) {
                     TLObject fileLocation = getFileLocation(index, null);
                     f2Resolver = () -> FileLoader.getInstance(currentAccount).getPathToAttach(fileLocation, true);
+                } else if (messageObject.isPhoto() && !messageObject.isLivePhoto() && getPhotoSizeForQuality(index) != null) {
+                    TLRPC.PhotoSize photoSize = getPhotoSizeForQuality(index);
+                    f2Resolver = photoSize == null ? null
+                            : () -> FileLoader.getInstance(currentAccount).getPathToAttach(photoSize, null, false, true);
                 } else {
                     TLRPC.Message finalMessage = messageObject.messageOwner;
                     f2Resolver = () -> FileLoader.getInstance(currentAccount).getPathToMessage(finalMessage);
@@ -16725,6 +17440,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 boolean existsFinal = exists;
                 File finalF2Local = f2Local;
                 AndroidUtilities.runOnUIThread(() -> {
+                    if (!expectedFileName.equals(currentFileNames[a])) {
+                        return;
+                    }
                     if (shownControlsByEnd && !actionBarWasShownBeforeByEnd && isPlaying) {
                         photoProgressViews[a].setBackgroundState(PROGRESS_PLAY, false, false);
                         return;
@@ -17053,7 +17771,10 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                         imageReceiver.setImageBitmap(parentActivity.getResources().getDrawable(R.drawable.photoview_placeholder));
                     }
                     return;
-                } else if (imageReceiver == centerImage && currentAnimation != null) {
+                } else if (imageReceiver == centerImage && currentAnimation != null
+                        && (!messageObject.isGif() || isSamePlaybackMessage(messageObject, gifAnimationMessage)
+                        && gifQualityDocument != null && gifAnimationDocument != null
+                        && gifQualityDocument.id == gifAnimationDocument.id && gifQualityDocument.dc_id == gifAnimationDocument.dc_id)) {
                     currentAnimation.addSecondParentView(containerView);
                     imageReceiver.setImageBitmap(currentAnimation);
                     return;
@@ -17120,8 +17841,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 ImageLocation videoThumb = null;
                 if (messageObject != null) {
                     parentObject = messageObject;
-                    if (sharedMediaType == MediaDataController.MEDIA_GIF) {
-                        TLRPC.Document document = messageObject.getDocument();
+                    if (messageObject.isGif()) {
+                        TLRPC.Document document = getGifDocument(index);
                         TLRPC.VideoSize videoSize = MessageObject.getDocumentVideoThumb(document);
                         if (videoSize != null) {
                             videoThumb = ImageLocation.getForDocument(videoSize, document);
@@ -17143,18 +17864,24 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     parentObject = null;
                 }
                 if (videoThumb != null) {
-                    String filter = sharedMediaType == MediaDataController.MEDIA_GIF ? ImageLoader.AUTOPLAY_FILTER : null;
+                    String filter = messageObject != null && messageObject.isGif()
+                            || sharedMediaType == MediaDataController.MEDIA_GIF ? ImageLoader.AUTOPLAY_FILTER : null;
                     imageReceiver.setImage(imageLocation, filter, videoThumb, null, placeHolder == null ? ImageLocation.getForObject(thumbLocation, photoObject) : null, "b", placeHolder != null ? new BitmapDrawable(placeHolder.bitmap) : null, size[0], null, parentObject, cacheOnly ? 1 : 0);
                     imageReceiver.setAllowStartAnimation(true);
                 } else {
                     String filter;
-                    if (avatarsDialogId != 0) {
+                    if (messageObject != null && messageObject.isGif()) {
+                        filter = ImageLoader.AUTOPLAY_FILTER;
+                        imageReceiver.setAllowStartAnimation(true);
+                    } else if (avatarsDialogId != 0) {
                         filter = imageLocation.imageType == FileLoader.IMAGE_TYPE_ANIMATION ? ImageLoader.AUTOPLAY_FILTER : null;
                     } else {
                         filter = null;
                     }
-                    boolean autoDownload = (DownloadController.getInstance(currentAccount).getAutodownloadMask() & DownloadController.AUTODOWNLOAD_TYPE_PHOTO) != 0;
-                    boolean needFullImage = autoDownload || currentIndex == index || FileLoader.getInstance(currentAccount).getPathToAttach(fileLocation).exists();
+                    boolean isGif = messageObject != null && messageObject.isGif();
+                    boolean autoDownload = isGif ? DownloadController.getInstance(currentAccount).canDownloadMedia(messageObject)
+                            : (DownloadController.getInstance(currentAccount).getAutodownloadMask() & DownloadController.AUTODOWNLOAD_TYPE_PHOTO) != 0;
+                    boolean needFullImage = autoDownload || currentIndex == index || FileLoader.getInstance(currentAccount).getPathToAttach(isGif ? getGifDocument(index) : fileLocation).exists();
                     ImageLocation imageThumbLocation = placeHolder == null ? ImageLocation.getForObject(thumbLocation, photoObject) : null;
                     BitmapDrawable thumbPlaceHolder = placeHolder != null ? new BitmapDrawable(placeHolder.bitmap) : null;
                     int cacheType = cacheOnly ? 1 : 0;
@@ -17730,6 +18457,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             .add(NotificationCenter.onDownloadingFilesChanged)
             .add(NotificationCenter.customStickerCreated)
             .add(NotificationCenter.fileLoadProgressChanged)
+            .add(NotificationCenter.didUpdateConnectionState)
             .add(NotificationCenter.mediaCountDidLoad)
             .add(NotificationCenter.mediaDidLoad)
             .add(NotificationCenter.dialogPhotosUpdate)
@@ -19004,6 +19732,13 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     public void onResume() {
         openingReadyShare = false;
         viewerInBackground = false;
+        if (photoQuality == PHOTO_QUALITY_AUTO && hasPhotoQualityOptions(currentIndex)) {
+            int networkType = ApplicationLoader.getAutodownloadNetworkType();
+            if (networkType != lastPhotoQualityNetworkType) {
+                lastPhotoQualityNetworkType = networkType;
+                applyPhotoQuality();
+            }
+        }
         if (!externalPlaybackTransition) {
             for (TLRPC.Document document : playbackDocuments()) FileDownloadTasks.getInstance(currentAccount).setViewerBackground(document, false);
             if (pausedForBackground) restoreDownloadPlayer(wasPlayingBeforeBackground);
@@ -19025,7 +19760,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     public void onConfigurationChanged(Configuration newConfig) {}
 
     public void onPause() {
-        if (currentAnimation != null && !isManagedVideo()) {
+        if (currentAnimation != null && !(isManagedVideo() || isManagedGif())) {
             closePhoto(false, false);
             return;
         }
@@ -20611,6 +21346,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             stickerMakerView.drawOutline(canvas, false, containerView, switchingToMode != -1);
             centerImage.setAlpha(alpha);
             centerImage.draw(canvas);
+            if (openingWithMediaPreviewQuality && currentAnimation != null && centerImage.getAnimation() == currentAnimation) {
+                onGifAnimationReady(centerImage);
+            }
             stickerMakerView.drawOutline(canvas, true, containerView, switchingToMode != -1);
             stickerMakerView.drawSegmentBorderPath(canvas, centerImage, centerImageTransform, containerView);
             centerImageTransformLocked = true;
@@ -20804,7 +21542,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 }
                 if (file == null || !file.exists()) {
                     file = null;
-                    if (currentMessageObject.isVideo() && (currentMessageObject.hasVideoQualities() || SharedConfig.streamMedia) && !DialogObject.isEncryptedDialog(currentMessageObject.getDialogId()) && currentMessageObject.canStreamVideo()) {
+                    if ((currentMessageObject.isVideo() || currentMessageObject.isGif()) && (currentMessageObject.hasVideoQualities() || currentMessageObject.isVideo() && SharedConfig.streamMedia) && !DialogObject.isEncryptedDialog(currentMessageObject.getDialogId()) && currentMessageObject.canStreamVideo()) {
                         final int reference = FileLoader.getInstance(currentMessageObject.currentAccount).getFileReference(currentMessageObject);
 
                         videoUrises = new ArrayList<>();
@@ -20893,15 +21631,27 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 AndroidUtilities.openDocument(currentMessageObject, parentActivity, null);
                 return;
             }
-            if (isManagedVideo()) {
+            if (isManagedVideo() || hasManagedGifQualities()) {
                 // Keep quality selection available even when the original file is already cached.
                 final TLRPC.MessageMedia media = MessageObject.getMedia(currentMessageObject.messageOwner);
-                videoUrises = VideoPlayer.getQualities(currentAccount, currentMessageObject.getDownloadDocument(), media.alt_documents,
+                videoUrises = VideoPlayer.getQualities(currentAccount, isManagedGif() ? currentMessageObject.getDocumentFast() : currentMessageObject.getDownloadDocument(), media.alt_documents,
                         FileLoader.getInstance(currentAccount).getFileReference(currentMessageObject), false);
                 VideoPlayer.Quality selected = videoUrises.size() > 1
                         ? VideoPlayer.getSavedQuality(videoUrises, currentMessageObject) : null;
                 VideoPlayer.Quality initial = selected == null
                         ? VideoPlayer.getInitialQuality(videoUrises, currentMessageObject) : selected;
+                if (selected == null && openingWithMediaPreviewQuality && currentMessageObject != null) {
+                    VideoPlayer.VideoUri previewQuality = currentMessageObject.thumbQuality;
+                    for (VideoPlayer.Quality quality : videoUrises) {
+                        for (VideoPlayer.VideoUri qualityUri : quality.uris) {
+                            if (previewQuality != null && (qualityUri == previewQuality || qualityUri.document == previewQuality.document)) {
+                                initial = quality;
+                                break;
+                            }
+                        }
+                        if (initial == quality) break;
+                    }
+                }
                 TLRPC.Document document = initial != null ? initial.getDownloadDocument() : null;
                 if (selected != null && document != null) {
                     bindPlaybackDownload(document);
@@ -20910,6 +21660,11 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             }
             preparePlayer(videoUrises, uri, true, false, currentMessageObject != null && currentMessageObject.isLivePhoto());
             videoSizeSet = true;
+            applyPhotoPreviewQuality();
+            if (!openingWithMediaPreviewQuality && openingPhotoPreviewSize != null) {
+                openingPhotoPreviewSize = null;
+                applyPhotoQuality();
+            }
         }
     }
 

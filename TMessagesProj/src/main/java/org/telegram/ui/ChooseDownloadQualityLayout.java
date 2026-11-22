@@ -7,11 +7,14 @@ import android.content.Context;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.FileLoader;
+import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.R;
@@ -31,9 +34,21 @@ public class ChooseDownloadQualityLayout {
     public final ActionBarPopupWindow.ActionBarPopupWindowLayout layout;
     public final LinearLayout buttonsLayout;
     private final Callback callback;
+    private final PhotoCallback photoCallback;
+    private final Runnable saveAllPhotos;
 
     public ChooseDownloadQualityLayout(Context context, PopupSwipeBackLayout swipeBackLayout, Callback callback) {
+        this(context, swipeBackLayout, callback, null, null);
+    }
+
+    public ChooseDownloadQualityLayout(Context context, PopupSwipeBackLayout swipeBackLayout, PhotoCallback callback, Runnable saveAllPhotos) {
+        this(context, swipeBackLayout, null, callback, saveAllPhotos);
+    }
+
+    public ChooseDownloadQualityLayout(Context context, PopupSwipeBackLayout swipeBackLayout, Callback callback, PhotoCallback photoCallback, Runnable saveAllPhotos) {
         this.callback = callback;
+        this.photoCallback = photoCallback;
+        this.saveAllPhotos = saveAllPhotos;
         layout = new ActionBarPopupWindow.ActionBarPopupWindowLayout(context, 0, null);
         layout.setFitItems(true);
 
@@ -72,11 +87,12 @@ public class ChooseDownloadQualityLayout {
 
     public boolean update(MessageObject messageObject, TLRPC.Document current) {
         if (messageObject == null || messageObject.messageOwner == null || messageObject.messageOwner.media == null) return false;
-        if (!messageObject.isVideo()) return false;
+        if (!messageObject.isVideo() && !messageObject.isGif()) return false;
 
         TLRPC.MessageMedia media = MessageObject.getMedia(messageObject.messageOwner);
         if (media == null) return false;
-        ArrayList<VideoPlayer.Quality> qualities = VideoPlayer.getQualities(messageObject.currentAccount, messageObject.getDownloadDocument(), media.alt_documents, 0, false);
+        ArrayList<VideoPlayer.Quality> qualities = messageObject.isGif() ? getGifQualities(messageObject)
+                : VideoPlayer.getQualities(messageObject.currentAccount, messageObject.getDownloadDocument(), media.alt_documents, 0, false);
 
         buttonsLayout.removeAllViews();
         for (int i = 0; i < qualities.size(); ++i) {
@@ -87,7 +103,7 @@ public class ChooseDownloadQualityLayout {
             }
             final VideoPlayer.VideoUri uri = selected;
             if (uri == null) continue;
-            String title = q.toString();
+            String title = q.original && messageObject.isGif() ? getString(R.string.QualityOriginal) : q.toString();
             if (sameDocument(uri.document, current)) title += " · " + getString(R.string.Current);
             SpannableStringBuilder subtitle = new SpannableStringBuilder();
             if (uri.isCached()) {
@@ -116,12 +132,80 @@ public class ChooseDownloadQualityLayout {
         return buttonsLayout.getChildCount() > 0;
     }
 
+    public static ArrayList<VideoPlayer.Quality> getGifQualities(MessageObject messageObject) {
+        TLRPC.Document original = messageObject.getDocumentFast();
+        TLRPC.MessageMedia media = MessageObject.getMedia(messageObject.messageOwner);
+        int reference = FileLoader.getInstance(messageObject.currentAccount).getFileReference(messageObject);
+        ArrayList<VideoPlayer.Quality> qualities = VideoPlayer.getQualities(messageObject.currentAccount, original,
+                media == null ? null : media.alt_documents, reference, false);
+        if (original != null) {
+            boolean hasOriginal = false;
+            for (VideoPlayer.Quality quality : qualities) {
+                hasOriginal |= quality.original;
+            }
+            if (!hasOriginal) {
+                try {
+                    VideoPlayer.VideoUri uri = VideoPlayer.VideoUri.of(messageObject.currentAccount, original, null, reference, false);
+                    if (uri.width <= 0 || uri.height <= 0) {
+                        uri.original = true;
+                        for (TLRPC.DocumentAttribute attribute : original.attributes) {
+                            if (attribute instanceof TLRPC.TL_documentAttributeImageSize) {
+                                uri.width = attribute.w;
+                                uri.height = attribute.h;
+                                break;
+                            }
+                        }
+                        qualities.add(0, new VideoPlayer.Quality(uri));
+                    }
+                } catch (Exception exception) {
+                    FileLog.e(exception);
+                }
+            }
+        }
+        return qualities;
+    }
+
+    public boolean updatePhoto(MessageObject messageObject, TLRPC.Photo photo, ArrayList<TLRPC.PhotoSize> sizes, TLRPC.PhotoSize current, String allItemsPluralKey, int photoCount) {
+        if (messageObject == null || photo == null || sizes == null || sizes.isEmpty() || photoCallback == null) return false;
+        buttonsLayout.removeAllViews();
+        for (int i = sizes.size() - 1; i >= 0; i--) {
+            TLRPC.PhotoSize size = sizes.get(i);
+            SpannableStringBuilder title = new SpannableStringBuilder();
+            title.append(Integer.toString(size.w)).append(" x ").append(Integer.toString(size.h));
+            SpannableStringBuilder subtitle = new SpannableStringBuilder(AndroidUtilities.formatFileSize(size.size));
+            if (size == current) {
+                subtitle.append(" · ").append(getString(R.string.Current));
+            }
+            ActionBarMenuSubItem item = ActionBarMenuItem.addItem(buttonsLayout, 0, title, false, null);
+            item.setSubtext(subtitle);
+            item.setColors(0xfffafafa, 0xfffafafa);
+            item.subtextView.setPadding(0, 0, 0, 0);
+            item.setOnClickListener(view -> photoCallback.onQualitySelected(messageObject, photo, size));
+            item.setSelectorColor(0x0fffffff);
+        }
+        if (!TextUtils.isEmpty(allItemsPluralKey) && saveAllPhotos != null) {
+            FrameLayout gap = new FrameLayout(buttonsLayout.getContext());
+            gap.setBackgroundColor(0xff181818);
+            buttonsLayout.addView(gap, new LinearLayout.LayoutParams(LayoutHelper.MATCH_PARENT, dp(8)));
+            ActionBarMenuSubItem item = ActionBarMenuItem.addItem(buttonsLayout, R.drawable.msg_gallery,
+                    LocaleController.formatPluralString(allItemsPluralKey, photoCount), false, null);
+            item.setColors(0xfffafafa, 0xfffafafa);
+            item.setSelectorColor(0x0fffffff);
+            item.setOnClickListener(view -> saveAllPhotos.run());
+        }
+        return buttonsLayout.getChildCount() > 0;
+    }
+
     private static boolean sameDocument(TLRPC.Document first, TLRPC.Document second) {
         return first != null && second != null && first.id == second.id && first.dc_id == second.dc_id;
     }
 
     public interface Callback {
         void onQualitySelected(MessageObject messageObject, VideoPlayer.Quality quality);
+    }
+
+    public interface PhotoCallback {
+        void onQualitySelected(MessageObject messageObject, TLRPC.Photo photo, TLRPC.PhotoSize size);
     }
 
 }

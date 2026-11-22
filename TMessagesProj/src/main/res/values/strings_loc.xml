@@ -19,4 +19,5 @@
     <string name="RemoveDownloadTasksTitle_other">Remove %d download tasks</string>
     <string name="RemoveDownloadTasksMessage">Unfinished tasks will be cancelled and the selected entries removed from the download list. Downloaded and saved files will be kept.</string>
     <string name="Current">Current</string>
+    <string name="PhotoQuality">Photo Quality</string>
 </resources>
