@@ -6471,6 +6471,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             lastDeleteDate = messageObject.messageOwner.destroyTime;
             lastViewsCount = messageObject.messageOwner.views;
             lastRepliesCount = getRepliesCount();
+            lastReactions = messageObject.messageOwner.reactions;
             if (messageIdChanged) {
                 isPressed = false;
                 isCheckPressed = true;
