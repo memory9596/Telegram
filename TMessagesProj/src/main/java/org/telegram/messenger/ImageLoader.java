@@ -1961,6 +1961,9 @@ public class ImageLoader {
                     a--;
                 }
             }
+            if (!imageReceiverArray.isEmpty() && url != null && imageLocation != null && imageLocation.photo != null) {
+                changePriority(FileLoader.PRIORITY_LOW);
+            }
             if (imageReceiverArray.isEmpty()) {
                 if (imageLocation != null) {
                     String taskFileName = imageLocation.location != null ? FileLoader.getAttachFileName(imageLocation.location, ext)
@@ -2012,6 +2015,13 @@ public class ImageLoader {
 
         void changePriority(int newFileLoaderPriority) {
             if (imageLocation != null) {
+                if (url != null && imageLocation.photo != null) {
+                    newFileLoaderPriority = FileLoader.PRIORITY_LOW;
+                    for (int i = 0; i < imageReceiverArray.size(); i++) {
+                        newFileLoaderPriority = Math.max(newFileLoaderPriority, types.get(i) == ImageReceiver.TYPE_THUMB
+                                ? FileLoader.PRIORITY_HIGH : imageReceiverArray.get(i).getFileLoadingPriority());
+                    }
+                }
                 TLRPC.Document document = null;
                 SecureDocument secureDocument = null;
                 WebFile webDocument = null;
@@ -2864,6 +2874,19 @@ public class ImageLoader {
         });
     }
 
+    public void cancelUnobservedPhotoLoad(int account, TLRPC.PhotoSize photo) {
+        String fileName = FileLoader.getAttachFileName(photo);
+        imageLoadQueue.postRunnable(() -> {
+            CacheImage image = imageLoadingByUrl.get(fileName);
+            if (image != null && image.currentAccount == account && !image.imageReceiverArray.isEmpty()) {
+                return;
+            }
+            if (!FileDownloadTasks.keepsFile(account, fileName)) {
+                FileLoader.getInstance(account).cancelLoadFile(photo);
+            }
+        });
+    }
+
     public void cancelLoadingForImageReceiver(final ImageReceiver imageReceiver, final boolean cancelAll) {
         if (imageReceiver == null) {
             return;
@@ -3050,6 +3073,9 @@ public class ImageLoader {
                 }
                 if (!added && alreadyLoadingUrl != null) {
                     alreadyLoadingUrl.addImageReceiver(imageReceiver, key, filter, type, guid);
+                    if (alreadyLoadingUrl.imageLocation != null && alreadyLoadingUrl.imageLocation.photo != null) {
+                        alreadyLoadingUrl.changePriority(imageReceiver.getFileLoadingPriority());
+                    }
                     added = true;
                 }
             }

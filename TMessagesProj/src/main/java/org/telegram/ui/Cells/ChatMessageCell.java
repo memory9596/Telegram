@@ -349,6 +349,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 checkVideoPlayback(true, null);
                 updateButtonState(false, true, false);
             }
+        } else if (id == NotificationCenter.fileLoaded && currentMessageObject != null && currentMessageObject.type == MessageObject.TYPE_PHOTO
+                && currentPhotoObject != null && FileLoader.getAttachFileName(currentPhotoObject).equals(args[0])
+                && (!currentMessageObject.mediaExists || buttonState == 1)) {
+            currentMessageObject.mediaExists = true;
+            onSuccessDownload((String) args[0]);
         } else if (id == NotificationCenter.emojiLoaded) {
             invalidate();
         } else if (id == NotificationCenter.didUpdatePremiumGiftStickers) {
@@ -6291,8 +6296,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     FileLoader.getInstance(currentAccount).cancelLoadFile(document);
                 } else {
                     TLRPC.PhotoSize photo = FileLoader.getClosestPhotoSizeWithSize(messageObject.photoThumbs, AndroidUtilities.getPhotoSize());
-                    if (photo != null && !FileDownloadTasks.keepsFile(currentAccount, FileLoader.getAttachFileName(photo))) {
-                        FileLoader.getInstance(currentAccount).cancelLoadFile(photo);
+                    if (photo != null) {
+                        ImageLoader.getInstance().cancelUnobservedPhotoLoad(currentAccount, photo);
                     }
                 }
             }
@@ -14875,6 +14880,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             if (!fileExists) {
                 DownloadController.getInstance(currentAccount).addLoadingFileObserver(fileName, currentMessageObject, this);
                 float setProgress = 0;
+                boolean preserveProgress = false;
                 if (!FileLoader.getInstance(currentAccount).isLoadingFile(fileName)) {
                     if (
                         !currentMessageObject.loadingCancelled && autoDownload && (
@@ -14887,9 +14893,15 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                         buttonState = 0;
                     }
                 } else {
-                    buttonState = 1;
+                    boolean photoQueued = currentMessageObject.isPhoto() && !currentMessageObject.isLivePhoto()
+                            && !currentMessageObject.loadingCancelled && FileLoader.getInstance(currentAccount).isFileQueued(fileName);
+                    buttonState = photoQueued ? 0 : 1;
                     long[] progress = ImageLoader.getInstance().getFileProgressSizes(fileName);
-                    setProgress = progress != null ? DownloadController.getProgress(progress) : 0;
+                    if (progress != null) {
+                        setProgress = DownloadController.getProgress(progress);
+                    } else if (!photoQueued) {
+                        preserveProgress = true;
+                    }
                     if (progress != null && progress[0] == progress[1]) {
                         createLoadingProgressLayout(progress[0], progress[1]);
                     } else {
@@ -14898,7 +14910,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                         }
                     }
                 }
-                radialProgress.setProgress(setProgress, false);
+                if (!preserveProgress) {
+                    radialProgress.setProgress(setProgress, false);
+                }
             } else {
                 DownloadController.getInstance(currentAccount).removeLoadingFileObserver(this);
                 if (documentAttachType == DOCUMENT_ATTACH_TYPE_GIF && !photoImage.isAllowStartAnimation()) {
@@ -15191,9 +15205,19 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     thumb = currentPhotoObjectThumb;
                     thumbFilter = currentPhotoFilterThumb;
                 }
+                String photoFileName = currentPhotoObject == null ? null : FileLoader.getAttachFileName(currentPhotoObject);
                 final int cacheType = currentMessageObject.shouldEncryptPhotoOrVideo() ? 2 : 0;
                 if (currentMessageObject.type == MessageObject.TYPE_PHOTO || currentMessageObject.type == MessageObject.TYPE_EXTENDED_MEDIA_PREVIEW) {
                     currentMessageObject.putInDownloadsStore = true;
+                    if (FileLoader.getInstance(currentAccount).isFileQueued(photoFileName) && currentPhotoObject != null) {
+                        FileLoader.getInstance(currentAccount).loadFile(
+                                ImageLocation.getForObject(currentPhotoObject, photoParentObject),
+                                currentMessageObject,
+                                null,
+                                FileLoader.PRIORITY_NORMAL_UP,
+                                cacheType
+                        );
+                    }
                     photoImage.setForceLoading(true);
                     photoImage.setImage(ImageLocation.getForObject(currentPhotoObject, photoParentObject), currentPhotoFilter, ImageLocation.getForObject(currentPhotoObjectThumb, photoParentObject), currentPhotoFilterThumb, currentPhotoObjectThumbStripped, currentPhotoObject.size, null, currentMessageObject, cacheType);
                 } else if (currentMessageObject.type == MessageObject.TYPE_GIF) {
@@ -15244,7 +15268,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     photoImage.setImage(ImageLocation.getForObject(currentPhotoObject, photoParentObject), currentPhotoFilter, ImageLocation.getForObject(currentPhotoObjectThumb, photoParentObject), currentPhotoFilterThumb, currentPhotoObjectThumbStripped, 0, null, currentMessageObject, 0);
                 }
                 currentMessageObject.loadingCancelled = false;
-                buttonState = 1;
+                buttonState = currentMessageObject.isPhoto() && !currentMessageObject.isLivePhoto()
+                        && FileLoader.getInstance(currentAccount).isFileQueued(photoFileName) ? 0 : 1;
                 if (video) {
                     videoRadialProgress.setIcon(MediaActionDrawable.ICON_CANCEL_FILL, false, animated);
                 } else {

@@ -214,7 +214,7 @@ public class FileLoadOperation {
     private long requestedBytesCount;
 
     public int currentAccount;
-    private boolean started;
+    private volatile boolean started;
     private int datacenterId;
     private int initialDatacenterId;
     private long documentId;

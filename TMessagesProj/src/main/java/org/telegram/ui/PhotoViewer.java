@@ -16286,6 +16286,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private void resetIndexForDeferredImageLoading() {
+        leftImage.setFileLoadingPriority(FileLoader.PRIORITY_NORMAL);
+        rightImage.setFileLoadingPriority(FileLoader.PRIORITY_NORMAL);
+        centerImage.setFileLoadingPriority(FileLoader.PRIORITY_HIGH);
         Object mark = centerImage.getMark();
         if (mark != null && mark.equals(MARK_DEFERRED_IMAGE_LOADING)) {
             setIndexToImage(centerImage, currentIndex, null);

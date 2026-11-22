@@ -758,6 +758,14 @@ public class FileLoader extends BaseController {
         return fileName != null && loadOperationPathsUI.containsKey(fileName);
     }
 
+    public boolean isFileQueued(final String fileName) {
+        if (!isLoadingFile(fileName)) {
+            return false;
+        }
+        FileLoadOperation operation = loadOperationPaths.get(fileName);
+        return operation == null || !operation.wasStarted();
+    }
+
     /** Full-file work, excluding playback ranges and idle stream readers. */
     public boolean isDownloadingFile(String fileName) {
         LoadOperationUIObject operation = fileName == null ? null : loadOperationPathsUI.get(fileName);
@@ -962,6 +970,9 @@ public class FileLoader extends BaseController {
         if (operation != null) {
             if (cacheType != 10 && operation.isPreloadVideoOperation()) {
                 operation.setIsPreloadVideoOperation(false);
+            }
+            if (imageLocation != null && imageLocation.photo != null) {
+                priority = Math.max(priority, operation.getPriority());
             }
             operation.setForceRequest(priority > 0);
             operation.setStream(stream, streamPriority, streamOffset);
