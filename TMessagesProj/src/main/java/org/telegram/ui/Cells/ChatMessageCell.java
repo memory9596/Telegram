@@ -5754,7 +5754,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (lastRepliesCount != getRepliesCount()) {
             return true;
         }
-        if (lastReactions != currentMessageObject.messageOwner.reactions) {
+        if (currentMessageObject.reactionsChanged || lastReactions != currentMessageObject.messageOwner.reactions) {
             return true;
         }
 
