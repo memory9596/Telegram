@@ -2208,10 +2208,9 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         }
 
         searchView = new FragmentSearchField(context, resourcesProvider);
-        BlurredBackgroundDrawable searchGlass = createShareGlass(searchView);
-        searchView.setupBlurredBackground(searchGlass);
         // FragmentSearchField expands its bounds by 4dp; this leaves the same 40dp glass body as COPY LINK.
-        searchGlass.setPadding(dp(4));
+        searchView.setupBlurredBackground(iBlur3FactoryLiquidGlass.create(searchView,
+                BlurredBackgroundProviderImpl.inputFieldShareAlert(resourcesProvider)));
         updateSearchFieldBackground();
         searchView.editText.addTextChangedListener(new TextWatcher() {
             @Override
@@ -5969,8 +5968,10 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
                 }
                 sheetBackdropInvalidated = true;
                 primeSheetGlass();
-                invalidateSheetGlass();
-                headerGlassNeedsCapture = true;
+                if (sheetBackdropInvalidated) {
+                    invalidateSheetGlass();
+                    headerGlassNeedsCapture = true;
+                }
             }, new Handler(Looper.getMainLooper()));
         } catch (IllegalArgumentException e) {
             material.recycle();
