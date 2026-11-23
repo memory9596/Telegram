@@ -38,6 +38,7 @@ public class MediaActionDrawable extends Drawable {
     public static final int ICON_CANCEL_PERCENT = 13;
     public static final int ICON_CANCEL_FILL = 14;
     public static final int ICON_UPDATE = 15;
+    public static final int ICON_QUEUED_PAUSE = 16;
 
     private TextPaint textPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     public Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -171,6 +172,8 @@ public class MediaActionDrawable extends Drawable {
                 transitionAnimationTime = 360.0f;
             } else if (currentIcon == ICON_NONE && icon == ICON_CANCEL_FILL || currentIcon == ICON_CANCEL_FILL && icon == ICON_NONE) {
                 transitionAnimationTime = 160.0f;
+            } else if (currentIcon == ICON_QUEUED_PAUSE && icon == ICON_DOWNLOAD) {
+                transitionAnimationTime = 360.0f;
             } else {
                 transitionAnimationTime = 220.0f;
             }
@@ -758,6 +761,27 @@ public class MediaActionDrawable extends Drawable {
 
             canvas.restore();
         }
+        if (currentIcon == ICON_QUEUED_PAUSE || nextIcon == ICON_QUEUED_PAUSE) {
+            // Keep the queued state distinct for accessibility, while drawing exactly the same
+            // static pause paths used by PlayPauseDrawable and the regular pause icon.
+            float queuedPauseAlpha;
+            if (currentIcon == ICON_QUEUED_PAUSE && nextIcon == ICON_QUEUED_PAUSE) {
+                queuedPauseAlpha = 1.0f;
+            } else if (currentIcon == ICON_QUEUED_PAUSE) {
+                queuedPauseAlpha = 1.0f - transitionProgress;
+            } else {
+                queuedPauseAlpha = transitionProgress;
+            }
+            paint2.setAlpha((int) (255 * queuedPauseAlpha * overrideAlpha));
+            applyShaderMatrix(true);
+            canvas.save();
+            canvas.translate(bounds.centerX(), bounds.centerY());
+            canvas.scale(drawableScale, drawableScale);
+            Theme.playPauseAnimator.draw(canvas, paint2, 500);
+            canvas.scale(1.0f, -1.0f);
+            Theme.playPauseAnimator.draw(canvas, paint2, 500);
+            canvas.restore();
+        }
         if (currentIcon == ICON_CHECK || nextIcon == ICON_CHECK) {
             applyShaderMatrix(false);
             float progress1;
@@ -881,7 +905,8 @@ public class MediaActionDrawable extends Drawable {
 
         if (animatingTransition) {
             if (transitionProgress < 1.0f) {
-                transitionProgress += dt / transitionAnimationTime;
+                float progressDelta = dt / transitionAnimationTime;
+                transitionProgress += progressDelta;
                 if (transitionProgress >= 1.0f) {
                     currentIcon = nextIcon;
                     transitionProgress = 1.0f;

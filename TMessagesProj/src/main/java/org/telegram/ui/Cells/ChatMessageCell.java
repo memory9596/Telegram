@@ -14570,6 +14570,10 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 videoRadialProgress.setColorKeys(Theme.key_chat_mediaLoaderPhoto, Theme.key_chat_mediaLoaderPhotoSelected, Theme.key_chat_mediaLoaderPhotoIcon, Theme.key_chat_mediaLoaderPhotoIconSelected);
                 if (buttonState >= 0 && buttonState < 4) {
                     if (buttonState == 0) {
+                        if (currentMessageObject.isPhoto() && !currentMessageObject.isLivePhoto() && !currentMessageObject.loadingCancelled
+                                && currentPhotoObject != null && FileLoader.getInstance(currentAccount).isFileQueued(FileLoader.getAttachFileName(currentPhotoObject))) {
+                            return MediaActionDrawable.ICON_QUEUED_PAUSE;
+                        }
                         return MediaActionDrawable.ICON_DOWNLOAD;
                     } else if (buttonState == 1) {
                         return MediaActionDrawable.ICON_CANCEL;
