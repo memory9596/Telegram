@@ -349,6 +349,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 checkVideoPlayback(true, null);
                 updateButtonState(false, true, false);
             }
+        } else if (id == NotificationCenter.fileLoaded && usesLocalGifPlayback() && documentAttach != null
+                && args.length >= 2 && FileLoader.getAttachFileName(documentAttach).equals(args[0])
+                && args[1] instanceof File file && !file.getName().endsWith(".enc") && file.isFile()) {
+            currentMessageObject.mediaExists = true;
+            setLocalGifImage(file);
+            updateButtonState(false, true, false);
         } else if (id == NotificationCenter.fileLoaded && currentMessageObject != null && currentMessageObject.type == MessageObject.TYPE_PHOTO
                 && currentPhotoObject != null && FileLoader.getAttachFileName(currentPhotoObject).equals(args[0])
                 && (!currentMessageObject.mediaExists || buttonState == 1)) {
@@ -3426,7 +3432,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 if (currentMessageObject.isSendError()) {
                     imagePressed = false;
                     result = false;
-                } else if (currentMessageObject.type == MessageObject.TYPE_GIF && buttonState == -1 && SharedConfig.isAutoplayGifs() && !currentMessageObject.isRepostPreview && photoImage.getAnimation() == null) {
+                } else if (currentMessageObject.type == MessageObject.TYPE_GIF && buttonState == -1
+                        && !currentMessageObject.downloadExists() && !currentMessageObject.attachPathExists
+                        && SharedConfig.isAutoplayGifs() && !currentMessageObject.isRepostPreview && photoImage.getAnimation() == null) {
                     imagePressed = false;
                     result = false;
                 }
@@ -6172,11 +6180,16 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 replyImageReceiver.onAttachedToWindow();
                 locationImageReceiver.onAttachedToWindow();
                 blurredPhotoImage.onAttachedToWindow();
-                if (photoImage.onAttachedToWindow()) {
-                    if (drawPhotoImage) {
-                        updateButtonState(false, false, false);
+                boolean restoredImage = photoImage.onAttachedToWindow();
+                if (usesLocalGifPlayback() && !currentMessageObject.attachPathExists) {
+                    // A detached cell does not receive fileLoaded.
+                    File file = FileDownloadTasks.localFile(currentAccount, documentAttach, null);
+                    if (file != null) {
+                        currentMessageObject.mediaExists = true;
+                        setLocalGifImage(file);
                     }
-                } else {
+                }
+                if (!restoredImage || drawPhotoImage) {
                     updateButtonState(false, false, false);
                 }
                 animatedEmojiReplyStack = AnimatedEmojiSpan.update(AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES, this, false, animatedEmojiReplyStack, drawCompactReply && compactReplyRow != null ? compactReplyRow.text : replyTextLayout);
@@ -9822,6 +9835,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                         }
                     } else if (messageObject.type == MessageObject.TYPE_GIF || messageObject.type == MessageObject.TYPE_ROUND_VIDEO) {
                         String fileName = FileLoader.getAttachFileName(messageObject.getDocument());
+                        File gifFile = usesLocalGifPlayback() && !messageObject.attachPathExists
+                                ? FileDownloadTasks.localFile(currentAccount, documentAttach, null) : null;
+                        if (gifFile != null) {
+                            messageObject.mediaExists = true;
+                        }
                         int localFile = 0;
                         if (messageObject.attachPathExists) {
                             DownloadController.getInstance(currentAccount).removeLoadingFileObserver(this);
@@ -9845,7 +9863,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                                     photoImage.setCrossfadeWithOldImage(true);
                                     photoImage.setCrossfadeDuration(250);
                                 }
-                                if (localFile == 0 && videoSize != null && (currentPhotoObject == null || currentPhotoObjectThumb == null)) {
+                                if (gifFile != null) {
+                                    setLocalGifImage(gifFile);
+                                } else if (localFile == 0 && videoSize != null && (currentPhotoObject == null || currentPhotoObjectThumb == null)) {
                                     photoImage.setImage(ImageLocation.getForDocument(document), ImageLoader.AUTOPLAY_FILTER, ImageLocation.getForDocument(videoSize, documentAttach), null, ImageLocation.getForDocument(currentPhotoObject != null ? currentPhotoObject : currentPhotoObjectThumb, documentAttach), currentPhotoObject != null ? currentPhotoFilter : currentPhotoFilterThumb, currentPhotoObjectThumbStripped, document.size, null, messageObject, cacheType);
                                 } else {
                                     if (isRoundVideo && !messageIdChanged && photoImage.hasStaticThumb()) {
@@ -15399,8 +15419,40 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         updateButtonState(true, documentAttachType == DOCUMENT_ATTACH_TYPE_AUDIO || documentAttachType == DOCUMENT_ATTACH_TYPE_MUSIC, false);
     }
 
+    private boolean usesLocalGifPlayback() {
+        return currentMessageObject != null && documentAttachType == DOCUMENT_ATTACH_TYPE_GIF
+                && currentMessageObject.type == MessageObject.TYPE_GIF && !currentMessageObject.shouldEncryptPhotoOrVideo();
+    }
+
+    private void setLocalGifImage(File file) {
+        if (currentMessageObject.attachPathExists || currentMessageObject.needDrawBluredPreview()) {
+            return;
+        }
+        String path = file.getAbsolutePath();
+        ImageLocation location = photoImage.getImageLocation();
+        if (location != null && path.equals(location.path) && ImageLoader.AUTOPLAY_FILTER.equals(photoImage.getImageFilter())) {
+            return;
+        }
+        boolean autoplay = currentMessageObject.gifState != 1 && !currentMessageObject.isHiddenSensitive()
+                && SharedConfig.isAutoplayGifs() && !currentMessageObject.isRepostPreview;
+        photoImage.setAllowStartAnimation(autoplay);
+        photoImage.setImage(ImageLocation.getForVideoPath(path), ImageLoader.AUTOPLAY_FILTER, ImageLocation.getForObject(currentPhotoObject, photoParentObject), currentPhotoObject instanceof TLRPC.TL_photoStrippedSize || currentPhotoObject != null && "s".equals(currentPhotoObject.type) ? currentPhotoFilterThumb : currentPhotoFilter, ImageLocation.getForObject(currentPhotoObjectThumb, photoParentObject), currentPhotoFilterThumb, currentPhotoObjectThumbStripped, documentAttach.size, null, currentMessageObject, 0);
+        if (autoplay) {
+            photoImage.startAnimation();
+        } else {
+            photoImage.stopAnimation();
+        }
+        currentMessageObject.hadAnimationNotReadyLoading = false;
+        autoPlayingMedia = true;
+    }
+
     @Override
     public void onSuccessDownload(String fileName) {
+        // The downloads-list update can remove this listener before fileLoaded. Use only
+        // fileLoaded for standalone GIFs so the image is set regardless of observer order.
+        if (currentMessageObject == null || usesLocalGifPlayback()) {
+            return;
+        }
         if (documentAttachType == DOCUMENT_ATTACH_TYPE_STICKER && currentMessageObject.isDice()) {
             DownloadController.getInstance(currentAccount).removeLoadingFileObserver(this);
             setCurrentDiceValue(true);
@@ -15422,8 +15474,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     photoImage.startAnimation();
                     autoPlayingMedia = true;
                 } else if (documentAttachType == DOCUMENT_ATTACH_TYPE_GIF) {
+                    File gifFile = FileLoader.getInstance(currentAccount).getPathToAttach(documentAttach);
                     if (currentMessageObject.cachedQuality != null) {
                         photoImage.setImage(ImageLocation.getForVideoPath(currentMessageObject.cachedQuality.uri.getPath()), ImageLoader.AUTOPLAY_FILTER, ImageLocation.getForObject(currentPhotoObject, photoParentObject), currentPhotoObject instanceof TLRPC.TL_photoStrippedSize || currentPhotoObject != null && "s".equals(currentPhotoObject.type) ? currentPhotoFilterThumb : currentPhotoFilter, ImageLocation.getForObject(currentPhotoObjectThumb, photoParentObject), currentPhotoFilterThumb, currentPhotoObjectThumbStripped, documentAttach.size, null, currentMessageObject, 0);
+                    } else if (gifFile.exists()) {
+                        photoImage.setImage(ImageLocation.getForVideoPath(gifFile.getAbsolutePath()), ImageLoader.AUTOPLAY_FILTER, ImageLocation.getForObject(currentPhotoObject, photoParentObject), currentPhotoObject instanceof TLRPC.TL_photoStrippedSize || currentPhotoObject != null && "s".equals(currentPhotoObject.type) ? currentPhotoFilterThumb : currentPhotoFilter, ImageLocation.getForObject(currentPhotoObjectThumb, photoParentObject), currentPhotoFilterThumb, currentPhotoObjectThumbStripped, documentAttach.size, null, currentMessageObject, 0);
                     } else {
                         photoImage.setImage(ImageLocation.getForDocument(documentAttach), ImageLoader.AUTOPLAY_FILTER, ImageLocation.getForObject(currentPhotoObject, photoParentObject), currentPhotoObject instanceof TLRPC.TL_photoStrippedSize || currentPhotoObject != null && "s".equals(currentPhotoObject.type) ? currentPhotoFilterThumb : currentPhotoFilter, ImageLocation.getForObject(currentPhotoObjectThumb, photoParentObject), currentPhotoFilterThumb, currentPhotoObjectThumbStripped, documentAttach.size, null, currentMessageObject, 0);
                     }
