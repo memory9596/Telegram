@@ -1075,6 +1075,12 @@ public class VideoPlayer implements Player.Listener, VideoListener, AnalyticsLis
             }
         }
 
+        if (!reset) {
+            // Track changes may not render another first frame to clear the fallback.
+            fallbackPosition = C.TIME_UNSET;
+            fallbackDuration = C.TIME_UNSET;
+        }
+
         if (onQualitySelectedListener != null && quality != null) onQualitySelectedListener.run(quality);
 
         if (reset) {
