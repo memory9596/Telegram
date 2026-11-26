@@ -173,8 +173,8 @@ public class DebugSettingsActivity extends UniversalFragment {
         if (BuildVars.DEBUG_PRIVATE_VERSION) {
             items.add(UItem.asButton(ID_CLEAN_APP_UPDATE, "Clean app update"));
             items.add(UItem.asButton(ID_SHARE_DEVICE_INFO, "Share device info"));
-            items.add(UItem.asButton(ID_PERFORMANCE_CLASS, "Force performance class"));
         }
+        items.add(UItem.asButton(ID_PERFORMANCE_CLASS, "Force performance class"));
         items.add(UItem.asButton(ID_MEMORY_DUMP, "Make Memory Dump"));
         if (BuildVars.DEBUG_PRIVATE_VERSION) {
             items.add(UItem.asCheck(ID_FLOATING_DEBUG, getString(R.string.FloatingDebugEnable)).setChecked(SharedConfig.isFloatingDebugActive));

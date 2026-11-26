@@ -4692,7 +4692,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                                 BuildVars.DEBUG_PRIVATE_VERSION ? getString(SharedConfig.isFloatingDebugActive ? R.string.FloatingDebugDisable : R.string.FloatingDebugEnable) : null,
                                 BuildVars.DEBUG_PRIVATE_VERSION ? "Force remove premium suggestions" : null,
                                 BuildVars.DEBUG_PRIVATE_VERSION ? "Share device info" : null,
-                                BuildVars.DEBUG_PRIVATE_VERSION ? "Force performance class" : null,
+                                "Force performance class",
                                 BuildVars.DEBUG_PRIVATE_VERSION && !InstantCameraView.allowBigSizeCameraDebug() ? !SharedConfig.bigCameraForRound ? "Force big camera for round" : "Disable big camera for round" : null,
                                 getString(DualCameraView.dualAvailableStatic(getContext()) ? "DebugMenuDualOff" : "DebugMenuDualOn"),
                                 BuildVars.DEBUG_VERSION ? SharedConfig.useSurfaceInStories ? "back to TextureView in stories" : "use SurfaceView in stories" : null,
