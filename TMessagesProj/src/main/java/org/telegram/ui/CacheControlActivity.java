@@ -849,7 +849,6 @@ public class CacheControlActivity extends BaseFragment implements NotificationCe
 //        progressDialog = new AlertDialog(getParentActivity(), AlertDialog.ALERT_TYPE_SPINNER);
 //        progressDialog.setCanCancel(false);
 //        progressDialog.showDelayed(500);
-        getFileLoader().cancelLoadAllFiles();
         getFileLoader().getFileLoaderQueue().postRunnable(() -> Utilities.globalQueue.postRunnable(() -> {
             cleanupFoldersInternal(onProgress, onDone);
         }));
@@ -1598,7 +1597,6 @@ public class CacheControlActivity extends BaseFragment implements NotificationCe
 
         ArrayList<CacheModel.FileInfo> fileInfos = new ArrayList<>(filesToRemove);
         getFileLoader().getFileDatabase().removeFiles(fileInfos);
-        getFileLoader().cancelLoadAllFiles();
         getFileLoader().getFileLoaderQueue().postRunnable(() -> {
             for (int i = 0; i < fileInfos.size(); i++) {
                 fileInfos.get(i).file.delete();
