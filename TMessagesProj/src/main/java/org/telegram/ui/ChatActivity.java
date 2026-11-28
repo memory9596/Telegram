@@ -6943,7 +6943,12 @@ public class ChatActivity extends BaseFragment implements
                                     break;
                                 }
                             }
-                            outRect.bottom = -h;
+                            int captionBottomCompensation=0;
+                            if (group.hasCaption && group.captionMessage == cell.getMessageObject() && !group.captionAbove && (position.flags & MessageObject.POSITION_FLAG_BOTTOM) != 0) {
+                                captionBottomCompensation=AndroidUtilities.dp(14);
+                                h-=captionBottomCompensation;
+                            }
+                            outRect.bottom=-h;
                         }
                     }
                 }
